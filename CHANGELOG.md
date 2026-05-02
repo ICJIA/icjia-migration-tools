@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5] - 2026-05-02
+
+### Changed — default flipped to publish-everything
+
+Source drafts now load into Strapi 5 as **published** by default. The
+editor flips individual records to draft post-migration as needed.
+
+To restore the old behavior (preserve source drafts as drafts), set
+`preserveSourceDrafts: true` in `config.js`.
+
+- `04-load.js`: when `preserveSourceDrafts !== true`, source drafts
+  (`published_at IS NULL`) get an inferred `publishedAt` from `created_at`.
+  POSTs always default-publish — no `?status=draft` query param.
+- `04b2-publish.js`: when `preserveSourceDrafts !== true`, no records are
+  skipped — every doc gets a publish PUT, ensuring every document ends
+  up with a synced published row regardless of source state.
+- `04c-fix-timestamps.js`: when `preserveSourceDrafts !== true`, source
+  drafts' `published_at` is filled from `created_at` instead of being
+  reverted to NULL by the timestamp restoration step.
+- `05-validate.js` check 3 (Draft preservation): when
+  `preserveSourceDrafts !== true`, the check passes with a SKIP note —
+  "0 drafts in S5" is the desired outcome, not a regression.
+- `config.js`: new `preserveSourceDrafts: false` knob documented.
+
+### Fixed — load script `record is not defined` typo
+
+The new draft-promotion branch in `04-load.js` referenced `record`
+instead of the surrounding scope's `rec`, causing 126 ReferenceErrors
+on the first run after the v0.9.5 default flip.
+
 ## [0.9.4] - 2026-05-02
 
 ### Removed — stale "Known acceptable issues" boilerplate

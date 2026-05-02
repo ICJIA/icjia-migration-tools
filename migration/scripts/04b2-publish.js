@@ -129,8 +129,10 @@ async function main() {
         continue;
       }
 
-      // Source was a draft? Leave as draft in S5.
-      if (!rec.published_at) {
+      // Source was a draft? Default behavior: publish anyway (the editor can
+      // flip back to draft post-migration). To preserve source drafts as
+      // drafts, set `preserveSourceDrafts: true` in config.
+      if (!rec.published_at && config.preserveSourceDrafts) {
         stats.skippedDrafts++;
         continue;
       }

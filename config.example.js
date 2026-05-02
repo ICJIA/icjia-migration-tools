@@ -115,6 +115,15 @@ export default {
   includeDrafts: true,
 
   /**
+   * When false (default), source drafts load into Strapi 5 as PUBLISHED
+   * (publishedAt inferred from created_at). The editor flips individual
+   * records back to draft post-migration as needed. Set true to map
+   * source drafts 1:1 to Strapi 5 drafts.
+   * @type {boolean}
+   */
+  preserveSourceDrafts: false,
+
+  /**
    * Script behavior settings.
    */
   settings: {

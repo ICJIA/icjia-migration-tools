@@ -183,10 +183,17 @@ async function main() {
           const ms = new Date(v).getTime();
           return Number.isFinite(ms) ? ms : null;
         };
+        // For published_at: when config.preserveSourceDrafts is false (the
+        // default), source drafts (published_at IS NULL) get an inferred
+        // publishedAt of created_at — same logic as 04-load.js. Otherwise
+        // they'd be reverted to draft here, undoing the load.
+        const publishedAtMs =
+          toMs(record.published_at) ??
+          (!config.preserveSourceDrafts ? toMs(record.created_at) : null);
         const params = updateCols.map((c) => {
           if (c === 'created_at') return toMs(record.created_at);
           if (c === 'updated_at') return toMs(record.updated_at);
-          if (c === 'published_at') return toMs(record.published_at);
+          if (c === 'published_at') return publishedAtMs;
           return null;
         });
 

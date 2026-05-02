@@ -328,12 +328,15 @@ async function main() {
               updated: true,
             };
           } else {
-            // Strapi 5 v5+ POST default creates BOTH a draft and a published
-            // row, even when publishedAt: null is in the body. To preserve a
-            // source draft (publishedAt IS NULL), we have to POST with
-            // ?status=draft so only the draft row is created (no published
-            // row, so no auto-published timestamp clobbering).
-            const statusQuery = isDraft ? '?status=draft' : '';
+            // Default: publish everything. Source drafts get an inferred
+            // publishedAt (created_at) so Strapi 5 marks them published. The
+            // editor can flip individual records back to draft after migration.
+            // To preserve source drafts as drafts instead, set
+            // `preserveSourceDrafts: true` in config.
+            if (isDraft && !config.preserveSourceDrafts) {
+              body.publishedAt = rec.created_at || rec.updated_at || new Date().toISOString();
+            }
+            const statusQuery = (isDraft && config.preserveSourceDrafts) ? '?status=draft' : '';
             result = await client.post(`/api/${restPluralName(ct)}${statusQuery}`, body);
             map[sourceId] = {
               sourceId,
