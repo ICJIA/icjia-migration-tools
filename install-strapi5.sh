@@ -17,11 +17,18 @@
 #   - Generate the API token
 #   - Paste the token into config.js
 #
+# Migration state reset:
+#   By default this script ALSO wipes the migration tool's working state
+#   (migration/data/, migration/output/, migration/config/field-map.json)
+#   so a re-run starts truly from scratch. Pass --keep-migration-data to
+#   preserve cached extracts and downloaded media.
+#
 # Usage:
 #   ./install-strapi5.sh                    # local dev (port 1337, dir ../icjia-public-strapi5)
 #   ./install-strapi5.sh --port=5150        # custom port
 #   ./install-strapi5.sh --target=/tmp/foo  # custom target dir
 #   ./install-strapi5.sh --force            # skip the "wipe existing dir" confirmation
+#   ./install-strapi5.sh --keep-migration-data  # don't wipe migration/data + output
 #   ./install-strapi5.sh --help             # show this help
 
 set -euo pipefail
@@ -37,14 +44,17 @@ DEFAULT_TARGET="$(cd "$SCRIPT_DIR/.." && pwd)/icjia-public-strapi5"
 TARGET="$DEFAULT_TARGET"
 PORT="1337"
 FORCE=0
+KEEP_MIGRATION_DATA=0
+MIGRATION_REPO="$SCRIPT_DIR"
 
 for arg in "$@"; do
   case "$arg" in
     --target=*) TARGET="${arg#--target=}" ;;
     --port=*)   PORT="${arg#--port=}" ;;
     --force)    FORCE=1 ;;
+    --keep-migration-data) KEEP_MIGRATION_DATA=1 ;;
     --help|-h)
-      sed -n '2,/^set/p' "$0" | sed 's/^# //;s/^#//' | head -n 25
+      sed -n '2,/^set/p' "$0" | sed 's/^# //;s/^#//' | head -n 35
       exit 0
       ;;
     *)
@@ -88,6 +98,27 @@ command -v pnpm >/dev/null || fail "pnpm not found. Install with: npm install -g
 ok "pnpm $(pnpm --version)"
 
 command -v npx >/dev/null || fail "npx not found"
+
+# ─────────────────────────────────────────────────────────────────────
+# Wipe migration tool's working state (true fresh start)
+# ─────────────────────────────────────────────────────────────────────
+
+if [ "$KEEP_MIGRATION_DATA" -eq 0 ]; then
+  step "Wiping migration tool's working state"
+  for path in \
+    "$MIGRATION_REPO/migration/data" \
+    "$MIGRATION_REPO/migration/output" \
+    "$MIGRATION_REPO/migration/config/field-map.json"; do
+    if [ -e "$path" ]; then
+      rm -rf "$path"
+      ok "removed $(basename "$(dirname "$path")")/$(basename "$path")"
+    fi
+  done
+  ok "migration state cleared (Phase 0 baseline)"
+else
+  step "Keeping migration data (--keep-migration-data)"
+  warn "Cached extracts, downloaded media, and ID maps preserved"
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # Confirm target wipe
@@ -264,4 +295,10 @@ echo "  ${CYAN}5.${RESET} From the migration tool repo, kick off the full pipeli
 echo "       ${DIM}cd $SCRIPT_DIR${RESET}"
 echo "       ${DIM}pnpm preflight${RESET}      ${DIM}# verify everything is wired${RESET}"
 echo "       ${DIM}pnpm migrate:full${RESET}   ${DIM}# preflight → phases 1-7 → postflight${RESET}"
+echo ""
+if [ "$KEEP_MIGRATION_DATA" -eq 0 ]; then
+  echo "  ${DIM}(Migration state was wiped — Phase 1+ will rebuild from scratch.)${RESET}"
+else
+  echo "  ${DIM}(Migration data was kept — Phase 2 extracts and Phase 3 downloads will skip cached items.)${RESET}"
+fi
 echo ""

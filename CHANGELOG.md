@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.8] - 2026-05-02
+
+### Added
+
+- `install-strapi5.sh` now wipes the migration tool's working state by
+  default — true Phase 0 fresh start. Removes:
+  - `migration/data/` (extracts, downloads, maps, transformed records,
+    reports)
+  - `migration/output/` (generated schemas)
+  - `migration/config/field-map.json` (Phase 1 generated artifact)
+- New flag `--keep-migration-data` to preserve those caches when the
+  Strapi 5 reinstall is just a fix (e.g., wrong port, regenerated token).
+
 ## [0.7.7] - 2026-05-02
 
 ### Fixed

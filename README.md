@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.7.7 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.7.8 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -292,12 +292,14 @@ cd /Volumes/satechi/webdev/icjia-migration-tools
 The script does everything except the browser-based admin user + API token creation. It:
 
 1. Validates Node 22+ and pnpm
-2. Wipes any existing `icjia-public-strapi5/` directory (with confirmation)
-3. Runs `create-strapi-app@latest` with `--javascript`, `--no-run`, etc.
-4. Sets `PORT` in `.env`
-5. Installs `@strapi/plugin-graphql`
-6. **Rebuilds native bindings** (the step pnpm 10+ blocks by default)
-7. Prints clear next-steps for the manual bits (admin user, token, paste into config.js)
+2. **Wipes the migration tool's working state** (`migration/data/`, `migration/output/`, `migration/config/field-map.json`) — true Phase 0 fresh start. Pass `--keep-migration-data` to preserve cached extracts and downloaded media.
+3. Wipes any existing `icjia-public-strapi5/` directory (with confirmation; `--force` to skip)
+4. Runs `create-strapi-app@latest` with `--javascript`, `--no-run`, etc.
+5. Sets `PORT` in `.env`
+6. Installs `@strapi/plugin-graphql`
+7. **Builds native bindings** (writes `pnpm.onlyBuiltDependencies` allowlist to package.json + runs `pnpm install`; the step pnpm 10+ blocks by default — most common first-time error)
+8. Verifies `better_sqlite3.node` exists; falls back to `node-gyp rebuild` if not
+9. Prints clear next-steps for the manual bits (admin user, token, paste into config.js)
 
 When it finishes, follow the printed next-steps and you're ready to run `pnpm migrate:full`.
 
