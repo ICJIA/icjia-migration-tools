@@ -9,6 +9,9 @@ node_modules/
 migration/data/
 migration/output/
 
+# Generated artifact — recreated by Phase 1b on every run
+migration/config/field-map.json
+
 # Per-developer config override (root-level only — don't hide Strapi 3 model files)
 /config.js
 

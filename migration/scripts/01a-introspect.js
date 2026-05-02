@@ -1,90 +1,151 @@
 /**
  * @module 01a-introspect
- * @description Phase 1a: Introspect Strapi 3
+ * @description Phase 1a: Introspect the Strapi 3 source.
  *
- * Collects schema information from two sources:
- * 1. GraphQL introspection query against a running Strapi 3 instance (optional —
- *    gracefully degrades if Strapi 3 is not running)
- * 2. Strapi 3 model files from the local `schemas/` directory (primary source)
+ * Reads two sources, in order of authority:
+ *
+ * 1. **Strapi 3 model files** (primary, authoritative)
+ *    - `docs/strapi-3-source/api/<type>/models/<type>.settings.json` for content types
+ *    - `docs/strapi-3-source/components/<category>/<name>.json` for components
+ *    These files carry the full Strapi 3 schema including `dominant`, `via`,
+ *    `allowedTypes`, defaults, indexes — none of which GraphQL exposes.
+ *
+ * 2. **GraphQL introspection** (secondary, defensive cross-check)
+ *    - Confirms the model files match what the live Strapi 3 endpoint exposes.
+ *    - Skipped gracefully if the endpoint is unreachable.
+ *
+ * Drives the type list from the manifest (`migration/config/content-types.json`),
+ * skipping any entry with `skipDefault: true`.
  *
  * Outputs:
- * - `data/introspection/strapi3.json` — GraphQL introspection result (filtered to content types)
- * - `data/introspection/strapi3-models.json` — Parsed model file data (authoritative)
+ * - `migration/data/introspection/source-schema.json` — normalized schema for downstream phases
+ * - `migration/data/introspection/strapi3-models.json` — raw model files (for diffing)
+ * - `migration/data/introspection/strapi3-graphql.json` — raw GraphQL introspection (or placeholder)
  *
  * @example
- *   node migration/scripts/01a-introspect.js
- *
- * Prerequisites:
- * - Strapi 3 model files in `schemas/` directory (article.settings.json, etc.)
- * - Optionally, Strapi 3 running at the configured GraphQL URL for cross-validation
+ *   pnpm introspect
+ *   # or: node migration/scripts/01a-introspect.js
  */
 
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createInterface } from 'readline';
+
+import { loadConfig } from '../lib/load-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 
-/** ANSI color codes for terminal output */
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-// Load config — fall back to example if config.js doesn't exist
-import { loadConfig } from '../lib/load-config.js';
 const config = await loadConfig();
 
-const INTROSPECTION_QUERY = `{
-  __schema {
-    types {
-      name
-      kind
-      fields {
-        name
-        type {
-          name
-          kind
-          ofType {
-            name
-            kind
-            ofType {
-              name
-              kind
-            }
-          }
-        }
-      }
-    }
-  }
-}`;
-
-// Content type names as they appear in GraphQL (capitalized)
-const GQL_TYPE_NAMES = new Set(['Article', 'Dataset', 'App']);
+/**
+ * Load the central content-types manifest.
+ * @returns {Promise<{contentTypes: Object[], components: Object[]}>}
+ */
+async function loadManifest() {
+  const manifestPath = path.resolve(ROOT, config.paths.contentTypesManifest);
+  const raw = await fs.readFile(manifestPath, 'utf8');
+  return JSON.parse(raw);
+}
 
 /**
- * Run a GraphQL introspection query against Strapi 3.
- * Returns filtered content type data, or null if Strapi 3 is unreachable.
- *
- * @returns {Promise<{types: Object[], allRelatedTypes: Object[]}|null>}
- *   Filtered introspection data, or null if connection failed
+ * Read all Strapi 3 content-type model files driven by the manifest.
+ * @param {Object[]} contentTypes - Manifest content type entries
+ * @returns {Promise<Object>} Models keyed by content type name
+ */
+async function readContentTypeModels(contentTypes) {
+  console.log('\nReading Strapi 3 content-type model files...');
+  const models = {};
+  const sourceDir = path.resolve(ROOT, config.strapi3SourcePath);
+
+  for (const ct of contentTypes) {
+    if (ct.skipDefault) {
+      console.log(`  ${DIM}skip${RESET} ${ct.name} (skipDefault: true)`);
+      continue;
+    }
+    const filePath = path.join(sourceDir, 'api', ct.name, 'models', `${ct.name}.settings.json`);
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      models[ct.name] = JSON.parse(raw);
+      const attrs = Object.keys(models[ct.name].attributes || {});
+      console.log(`  ${ct.name.padEnd(16)} ${attrs.length} attributes ${DIM}(${path.relative(ROOT, filePath)})${RESET}`);
+    } catch (err) {
+      console.error(`  ${RED}ERROR${RESET} ${ct.name}: ${err.message}`);
+      console.error(`  ${RED}      expected at: ${path.relative(ROOT, filePath)}${RESET}`);
+      process.exit(1);
+    }
+  }
+
+  return models;
+}
+
+/**
+ * Read all Strapi 3 component definition files driven by the manifest.
+ * @param {Object[]} components - Manifest component entries
+ * @returns {Promise<Object>} Components keyed by "category.name"
+ */
+async function readComponents(components) {
+  console.log('\nReading Strapi 3 component files...');
+  const result = {};
+  const sourceDir = path.resolve(ROOT, config.strapi3SourcePath, 'components');
+
+  for (const comp of components) {
+    const filePath = path.join(sourceDir, comp.category, `${comp.name}.json`);
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      const def = JSON.parse(raw);
+      const key = `${comp.category}.${comp.name}`;
+      result[key] = def;
+      const attrs = Object.keys(def.attributes || {});
+      console.log(`  ${key.padEnd(28)} ${attrs.length} attributes`);
+    } catch (err) {
+      console.error(`  ${RED}ERROR${RESET} ${comp.category}/${comp.name}: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Run a GraphQL introspection query against Strapi 3 (defensive cross-check).
+ * Returns null if the endpoint is unreachable — model files are authoritative.
  */
 async function introspectGraphQL() {
   const url = config.strapi3.graphqlUrl;
-  console.log(`\nIntrospecting Strapi 3 GraphQL at ${url}...`);
+  console.log(`\nCross-checking with Strapi 3 GraphQL at ${url}...`);
 
   const headers = { 'Content-Type': 'application/json' };
   if (config.strapi3.token) {
     headers['Authorization'] = `Bearer ${config.strapi3.token}`;
   }
 
+  const query = `{
+    __schema {
+      types {
+        name
+        kind
+        fields {
+          name
+          type { name kind ofType { name kind ofType { name kind } } }
+        }
+      }
+    }
+  }`;
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ query: INTROSPECTION_QUERY }),
+      body: JSON.stringify({ query }),
       signal: AbortSignal.timeout(config.settings?.requestTimeoutMs || 30000),
     });
 
@@ -97,23 +158,20 @@ async function introspectGraphQL() {
       throw new Error(`GraphQL errors: ${JSON.stringify(json.errors, null, 2)}`);
     }
 
-    // Filter to only content type types
     const allTypes = json.data.__schema.types;
-    const contentTypes = allTypes.filter(t => GQL_TYPE_NAMES.has(t.name) && t.kind === 'OBJECT');
-    const systemTypes = allTypes.filter(t =>
-      t.name.startsWith('Article') || t.name.startsWith('Dataset') || t.name.startsWith('App')
-    );
+    const objectTypes = allTypes.filter((t) => t.kind === 'OBJECT' && !t.name.startsWith('__'));
 
-    console.log(`  Found ${contentTypes.length} content types: ${contentTypes.map(t => t.name).join(', ')}`);
-    for (const ct of contentTypes) {
-      console.log(`    ${ct.name}: ${ct.fields?.length || 0} fields`);
-    }
-
-    return { types: contentTypes, allRelatedTypes: systemTypes };
+    console.log(`  ${GREEN}OK${RESET} ${objectTypes.length} object types visible`);
+    return { types: objectTypes };
   } catch (err) {
-    if (err.cause?.code === 'ECONNREFUSED' || err.message.includes('ECONNREFUSED') || err.message.includes('fetch failed')) {
-      console.warn(`  ${YELLOW}WARNING: Could not connect to Strapi 3 at ${url}${RESET}`);
-      console.warn(`  ${YELLOW}GraphQL introspection skipped. Model files will be used as the sole source.${RESET}`);
+    if (
+      err.cause?.code === 'ECONNREFUSED' ||
+      err.message.includes('ECONNREFUSED') ||
+      err.message.includes('fetch failed') ||
+      err.name === 'TimeoutError'
+    ) {
+      console.warn(`  ${YELLOW}WARN${RESET} ${url} unreachable — skipping cross-check`);
+      console.warn(`  ${YELLOW}     Model files are authoritative; this is non-blocking.${RESET}`);
       return null;
     }
     throw err;
@@ -121,167 +179,109 @@ async function introspectGraphQL() {
 }
 
 /**
- * Read Strapi 3 model definition files from the local `schemas/` directory,
- * falling back to the Strapi 3 project path if local files aren't found.
- *
- * @returns {Promise<Object>} Parsed models keyed by content type name
+ * Build a normalized schema document combining manifest, models, and components.
+ * This is what downstream phases (01b-generate-schemas, 02-extract, 04-load) read.
  */
-async function readModelFiles() {
-  console.log('\nReading Strapi 3 model files...');
-
-  const models = {};
-
-  for (const ctName of config.contentTypes) {
-    // Try local schemas/ directory first
-    const localPath = path.resolve(ROOT, config.paths.schemas, `${ctName}.settings.json`);
-    // Fallback: Strapi 3 project directory
-    const projectPath = path.resolve(ROOT, config.strapi3ProjectPath, `api/${ctName}/models/${ctName}.settings.json`);
-
-    let filePath = localPath;
-    try {
-      await fs.access(localPath);
-    } catch {
-      try {
-        await fs.access(projectPath);
-        filePath = projectPath;
-      } catch {
-        console.error(`  ${RED}ERROR: Model file not found for "${ctName}" at:${RESET}`);
-        console.error(`  ${RED}  ${localPath}${RESET}`);
-        console.error(`  ${RED}  ${projectPath}${RESET}`);
-        process.exit(1);
-      }
-    }
-
-    const raw = await fs.readFile(filePath, 'utf8');
-    models[ctName] = JSON.parse(raw);
-
-    const attrs = Object.keys(models[ctName].attributes || {});
-    console.log(`  ${ctName}: ${attrs.length} attributes (from ${path.relative(ROOT, filePath)})`);
-  }
-
-  return models;
-}
-
-/**
- * Check if the migration/data or migration/output directories contain
- * data from a previous run, and prompt the user to clean before proceeding.
- *
- * @returns {Promise<void>} Resolves when clean is confirmed or skipped
- */
-async function checkForStaleData() {
-  const dataDir = path.resolve(ROOT, 'migration/data');
-  const outputDir = path.resolve(ROOT, 'migration/output');
-
-  let hasData = false;
-  try {
-    const entries = await fs.readdir(dataDir);
-    if (entries.length > 0) hasData = true;
-  } catch { /* doesn't exist — fine */ }
-
-  try {
-    const entries = await fs.readdir(outputDir);
-    if (entries.length > 0) hasData = true;
-  } catch { /* doesn't exist — fine */ }
-
-  if (!hasData) return;
-
-  console.log(`\n${YELLOW}Previous migration data detected in migration/data/ and/or migration/output/.${RESET}`);
-  console.log(`${YELLOW}Starting fresh ensures no stale data interferes with this run.${RESET}\n`);
-
-  const answer = await promptYesNo('Clean migration directory before proceeding? [Y/n] ');
-
-  if (answer) {
-    for (const target of ['migration/data', 'migration/output', 'migration/config/field-map.json']) {
-      const absPath = path.resolve(ROOT, target);
-      try {
-        const stat = await fs.stat(absPath);
-        if (stat.isDirectory()) {
-          await fs.rm(absPath, { recursive: true });
-          console.log(`  ${GREEN}✓${RESET} Removed: ${target}/`);
-        } else {
-          await fs.unlink(absPath);
-          console.log(`  ${GREEN}✓${RESET} Removed: ${target}`);
-        }
-      } catch (err) {
-        if (err.code !== 'ENOENT') throw err;
-      }
-    }
-    console.log(`${GREEN}Clean complete.${RESET}\n`);
-  } else {
-    console.log('Skipping clean — existing data will be overwritten where applicable.\n');
-  }
-}
-
-/**
- * Prompt the user with a yes/no question. Default is Y (enter = yes).
- *
- * @param {string} question - The prompt text
- * @returns {Promise<boolean>} True if user answered yes (or pressed enter)
- */
-function promptYesNo(question) {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(question, (answer) => {
-      rl.close();
-      const trimmed = answer.trim().toLowerCase();
-      resolve(trimmed === '' || trimmed === 'y' || trimmed === 'yes');
-    });
-  });
+function buildNormalizedSchema(manifest, models, components) {
+  return {
+    version: '1.0',
+    generatedAt: new Date().toISOString(),
+    contentTypes: manifest.contentTypes
+      .filter((ct) => !ct.skipDefault)
+      .map((ct) => ({
+        manifest: ct,
+        model: models[ct.name] || null,
+      })),
+    components: manifest.components.map((comp) => ({
+      manifest: comp,
+      model: components[`${comp.category}.${comp.name}`] || null,
+    })),
+  };
 }
 
 async function main() {
-  console.log('=== Phase 1a: Introspect Strapi 3 ===');
+  console.log(`${BOLD}── Phase 1a: Introspect Strapi 3 source ──${RESET}`);
 
-  // Show current config so user can verify
-  console.log('\nConfiguration:');
-  console.log(`  Strapi 3 GraphQL: ${config.strapi3.graphqlUrl}`);
-  console.log(`  Strapi 3 API:     ${config.strapi3.apiUrl}`);
-  console.log(`  Strapi 3 token:   ${config.strapi3.token ? '(set)' : '(not set)'}`);
-  console.log(`  Schemas dir:      ${config.paths.schemas}`);
-  console.log(`  Content types:    ${config.contentTypes.join(', ')}`);
+  console.log('');
+  console.log('Configuration:');
+  console.log(`  Strapi 3 source path:  ${CYAN}${config.strapi3SourcePath}${RESET}`);
+  console.log(`  Strapi 3 GraphQL URL:  ${CYAN}${config.strapi3.graphqlUrl}${RESET}`);
+  console.log(`  Manifest path:         ${CYAN}${config.paths.contentTypesManifest}${RESET}`);
 
-  // Check for stale data and offer to clean
-  await checkForStaleData();
+  const manifest = await loadManifest();
+  const activeCount = manifest.contentTypes.filter((c) => !c.skipDefault).length;
+  console.log(`  Content types:         ${activeCount} active, ${manifest.contentTypes.length - activeCount} skipped`);
+  console.log(`  Components:            ${manifest.components.length}`);
 
-  // Run both data collection tasks
-  const [gqlResult, models] = await Promise.all([
+  // Read in parallel
+  const [models, components, gql] = await Promise.all([
+    readContentTypeModels(manifest.contentTypes),
+    readComponents(manifest.components),
     introspectGraphQL(),
-    readModelFiles(),
   ]);
 
-  // Create output directory
+  // Output directory
   const outputDir = path.resolve(ROOT, config.paths.introspection);
   await fs.mkdir(outputDir, { recursive: true });
 
-  // Save GraphQL introspection (may be null if Strapi 3 was unreachable)
-  const gqlPath = path.join(outputDir, 'strapi3.json');
-  if (gqlResult) {
-    await fs.writeFile(gqlPath, JSON.stringify(gqlResult, null, 2));
-    console.log(`\nGraphQL introspection saved to ${path.relative(ROOT, gqlPath)}`);
-  } else {
-    await fs.writeFile(gqlPath, JSON.stringify({ types: [], note: 'GraphQL introspection skipped — Strapi 3 not reachable' }, null, 2));
-    console.log(`\nGraphQL introspection skipped (placeholder saved to ${path.relative(ROOT, gqlPath)})`);
-  }
+  // Normalized schema for downstream phases
+  const normalized = buildNormalizedSchema(manifest, models, components);
+  const normalizedPath = path.join(outputDir, 'source-schema.json');
+  await fs.writeFile(normalizedPath, JSON.stringify(normalized, null, 2));
+  console.log(`\n${GREEN}Saved${RESET} normalized schema → ${path.relative(ROOT, normalizedPath)}`);
 
-  // Save model data
+  // Raw model files
   const modelsPath = path.join(outputDir, 'strapi3-models.json');
   await fs.writeFile(modelsPath, JSON.stringify(models, null, 2));
-  console.log(`Model data saved to ${path.relative(ROOT, modelsPath)}`);
+  console.log(`${GREEN}Saved${RESET} raw model files → ${path.relative(ROOT, modelsPath)}`);
+
+  // Raw component files
+  const componentsPath = path.join(outputDir, 'strapi3-components.json');
+  await fs.writeFile(componentsPath, JSON.stringify(components, null, 2));
+  console.log(`${GREEN}Saved${RESET} raw component files → ${path.relative(ROOT, componentsPath)}`);
+
+  // GraphQL introspection
+  const gqlPath = path.join(outputDir, 'strapi3-graphql.json');
+  if (gql) {
+    await fs.writeFile(gqlPath, JSON.stringify(gql, null, 2));
+    console.log(`${GREEN}Saved${RESET} GraphQL introspection → ${path.relative(ROOT, gqlPath)}`);
+  } else {
+    await fs.writeFile(
+      gqlPath,
+      JSON.stringify({ types: [], note: 'GraphQL introspection skipped — endpoint unreachable' }, null, 2)
+    );
+    console.log(`${DIM}Saved${RESET} GraphQL placeholder → ${path.relative(ROOT, gqlPath)}`);
+  }
 
   // Summary
-  console.log('\n--- Summary ---');
-  console.log(`Content types: ${config.contentTypes.join(', ')}`);
+  console.log('');
+  console.log(`${BOLD}── Summary ──${RESET}`);
+  console.log(`  Content types: ${Object.keys(models).length}`);
   for (const [ctName, model] of Object.entries(models)) {
     const attrs = Object.entries(model.attributes || {});
-    const scalars = attrs.filter(([, d]) => d.type && !d.plugin).length;
+    const scalars = attrs.filter(([, d]) => d.type && !d.plugin && !d.collection && !d.model).length;
     const relations = attrs.filter(([, d]) => (d.collection || d.model) && !d.plugin).length;
     const media = attrs.filter(([, d]) => d.plugin === 'upload').length;
-    console.log(`  ${ctName}: ${scalars} scalar, ${relations} relation, ${media} media`);
+    const componentFields = attrs.filter(([, d]) => d.type === 'component').length;
+    const dominantCount = attrs.filter(([, d]) => d.dominant === true).length;
+    const parts = [
+      `${scalars} scalar`,
+      `${relations} relation${dominantCount > 0 ? ` (${dominantCount} dominant)` : ''}`,
+      `${media} media`,
+    ];
+    if (componentFields > 0) parts.push(`${componentFields} component fields`);
+    console.log(`  ${ctName.padEnd(16)} ${parts.join(', ')}`);
   }
-  console.log('\nPhase 1a complete. Next: pnpm migrate:phase01 (or node migration/scripts/01b-generate-schemas.js)');
+  console.log(`  Components: ${Object.keys(components).length}`);
+
+  console.log('');
+  console.log('Next: 01b-generate-schemas (run via Phase 1 orchestrator)');
+  console.log(`  ${CYAN}pnpm migrate:phase01${RESET}`);
+  console.log('');
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(`\n${RED}FATAL: ${err.message}${RESET}`);
+  console.error(err.stack);
   process.exit(1);
 });

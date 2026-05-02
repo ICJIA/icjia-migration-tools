@@ -1,101 +1,165 @@
 /**
  * @module schema-generator
- * @description Generates Strapi 5 schema.json files from Strapi 3 model definitions.
+ * @description Generates Strapi 5 schema.json files from a normalized Strapi 3 source schema.
  *
- * This is the core transformation engine for Phase 1 of the migration.
- * It handles:
- * - Field type mapping (string → string, text → text, etc.)
- * - Override mappings (article.splash: string → media for Base64 fields)
- * - Upload plugin conversion (model: file, plugin: upload → media field)
- * - Relation conversion (Strapi 3 collection/via/dominant → Strapi 5 inversedBy/mappedBy)
- * - legacyId injection (added to every content type for migration traceability)
- * - Boilerplate generation (route/controller/service files for each content type)
+ * Core transformation engine for Phase 1 of the migration. Produces:
  *
- * The relation graph forms a triangle:
- *   article ↔ dataset (article dominant)
- *   article ↔ app     (app dominant)
- *   app     ↔ dataset (app dominant)
+ * 1. **Content-type schemas** — for `<strapi5ProjectPath>/src/api/<name>/content-types/<name>/schema.json`
+ *    Handles both `collectionType` and `singleType` (Home is a singleType).
+ *
+ * 2. **Component schemas** — for `<strapi5ProjectPath>/src/components/<category>/<name>.json`
+ *    Strapi 5 components are stored separately from content types and need their
+ *    own schema files.
+ *
+ * 3. **Boilerplate** — minimal `route`/`controller`/`service` files per content type
+ *    (CommonJS, the Strapi 5 default). Singletons get the same boilerplate.
+ *
+ * 4. **Relation graph** — persisted to `migration/data/relation-graph.json` for the
+ *    Phase 4 relation engine to drive its n-pass linking.
+ *
+ * Key transformations:
+ * - Field type pass-through via directMappings (string→string, etc.)
+ * - Upload-plugin fields → media fields, preserving allowedTypes from source
+ * - Relation fields → relation type with inversedBy (dominant) or mappedBy (inverse)
+ * - Component fields pass through verbatim (Strapi 3 + Strapi 5 share the shape)
+ * - `legacyId` injected on every collectionType (singletons skip — they have no array)
+ * - Incomplete source relations (Policy.tags, RequiredForm.tags) get injected `via` + `dominant`
+ * - The Post self-ref (`posts`/`post`) is dropped (0 records use it; manifest tags it as drop)
  *
  * @example
  *   import { generateStrapi5Schemas } from '../lib/schema-generator.js';
- *   const result = generateStrapi5Schemas(strapi3Models, fieldTypeMap);
- *   // result.article.schema → Strapi 5 schema.json object
- *   // result.article.boilerplate → { route, controller, service } strings
- *   // result.article.fieldMap → per-field mapping details
+ *   const result = generateStrapi5Schemas(sourceSchema, fieldTypeMap);
+ *   // result.contentTypes['post'] = { schema, boilerplate, fieldMap }
+ *   // result.components['carousel.carousel'] = { category, name, schema }
+ *   // result.relationGraph = [{ contentType, field, target, dominant, ... }, ...]
  */
 
-/** @type {Record<string, string>} Human-readable descriptions for each content type */
-const CONTENT_TYPE_DESCRIPTIONS = {
-  article: 'Research articles with markdown body, images, and media attachments',
-  dataset: 'Downloadable datasets with metadata, variables, and file attachments',
-  app: 'Dashboard apps with image, description, and links to articles and datasets',
-};
+const SELF_REF_DROPS = new Set([
+  // Post has post.posts ↔ post.post self-ref with 0 records — drop both sides.
+  'post.posts',
+  'post.post',
+]);
 
 /**
- * Build a relation graph across all models to determine dominance.
+ * Convert camelCase or snake_case to lowercase kebab-case.
+ * Used to derive Strapi 5 pluralName from manifest queryName.
  *
- * Scans every attribute in every model. For each relation field (identified by
- * having a `collection` or `model` property without `plugin: "upload"`), records
- * whether this side is dominant (`dominant: true` in Strapi 3).
- *
- * This cross-model pass is necessary because Strapi 5 relation conversion requires
- * knowing BOTH sides: the dominant side gets `inversedBy`, the non-dominant gets `mappedBy`.
- *
- * @param {Object} models - Strapi 3 models keyed by content type name
- * @returns {Map<string, {target: string, via: string|null, dominant: boolean, isCollection: boolean}>}
- *   Map keyed by "contentType.fieldName" with relation metadata
+ * @example
+ *   camelToKebab('requiredForms')  // 'required-forms'
+ *   camelToKebab('publications')   // 'publications'
+ *   camelToKebab('biographies')    // 'biographies'
  */
-function buildRelationGraph(models) {
-  const graph = new Map();
+function camelToKebab(s) {
+  return s
+    .replace(/_/g, '-')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase();
+}
 
-  for (const [ctName, model] of Object.entries(models)) {
+/**
+ * Convert kebab-case to Title Case for displayName.
+ *
+ * @example
+ *   titleCase('required-form')  // 'Required Form'
+ *   titleCase('biography')      // 'Biography'
+ */
+function titleCase(s) {
+  return s
+    .split('-')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+/**
+ * Build a relation graph across all content types to determine dominance.
+ * Reads attributes from each .settings.json model. Skips upload-plugin refs
+ * (those become media fields, not relations) and self-ref drops.
+ *
+ * @param {Array<{manifest: Object, model: Object}>} contentTypeEntries
+ * @returns {Map<string, {target, via, dominant, isCollection}>}
+ */
+function buildRelationGraph(contentTypeEntries) {
+  const graph = new Map();
+  for (const { manifest, model } of contentTypeEntries) {
+    if (!model) continue;
     for (const [fieldName, def] of Object.entries(model.attributes || {})) {
-      // Skip upload plugin refs — those become media fields, not relations
       if (def.plugin === 'upload') continue;
+      if (def.type === 'component') continue;
+      if (SELF_REF_DROPS.has(`${manifest.name}.${fieldName}`)) continue;
 
       const target = def.collection || def.model;
       if (!target) continue;
 
-      graph.set(`${ctName}.${fieldName}`, {
+      graph.set(`${manifest.name}.${fieldName}`, {
+        contentType: manifest.name,
+        field: fieldName,
         target,
         via: def.via || null,
         dominant: def.dominant === true,
         isCollection: !!def.collection,
+        isModel: !!def.model && !def.collection,
       });
     }
   }
-
   return graph;
 }
 
 /**
- * Convert a single Strapi 3 attribute definition to its Strapi 5 equivalent.
+ * Apply incomplete-relation fixups from field-type-map.json.
+ * Currently a no-op: Policy.tags and RequiredForm.tags are intentionally
+ * one-sided in the Strapi 3 source (no `via`, no `dominant`, no inverse field
+ * on Tag). Strapi 5 supports one-sided manyToMany — they generate as
+ * relations without `inversedBy` or `mappedBy`.
  *
- * Handles four categories of attributes:
- * 1. Upload plugin references → media fields
- * 2. Relations to other content types → relation fields with inversedBy/mappedBy
- * 3. Override fields (e.g., Base64 string → media) → custom definitions from field-type-map.json
- * 4. Standard typed fields → direct type mapping with constraint preservation
+ * Earlier versions injected `inversedBy: 'policies'` etc., but Tag has no
+ * corresponding `policies` field for that to point at, so Strapi 5 rejected
+ * the schema. Kept as a hook in case a future fix wants to actually mutate
+ * Tag's schema to add the inverse fields.
  *
- * @param {string} ctName - Content type name (e.g., "article")
- * @param {string} fieldName - Attribute name (e.g., "splash")
- * @param {Object} def - Strapi 3 attribute definition from the model
- * @param {Object} fieldTypeMap - Parsed field-type-map.json with directMappings and overrides
- * @param {Map} relationGraph - Relation graph from buildRelationGraph()
- * @returns {Object} Strapi 5 attribute definition
+ * @returns {Object} The attribute definition (currently unchanged)
  */
-function convertAttribute(ctName, fieldName, def, fieldTypeMap, relationGraph) {
-  // Upload plugin → media field
+function applyIncompleteRelationFix(ctName, fieldName, def, _fieldTypeMap) {
+  return def;
+}
+
+/**
+ * Convert a single Strapi 3 attribute to its Strapi 5 equivalent.
+ *
+ * Handles:
+ * - Component fields (pass through — same shape in Strapi 5)
+ * - Upload-plugin refs → media field, preserving allowedTypes from source
+ * - Relations → inversedBy/mappedBy based on dominance
+ * - Field-level overrides from field-type-map.json
+ * - Slug fields → uid type
+ * - Standard typed fields with constraint preservation
+ */
+function convertAttribute(ctName, fieldName, def, fieldTypeMap) {
+  // Component-typed attribute (from Strapi 3, where home/page/meeting/job already use them)
+  if (def.type === 'component') {
+    const attr = {
+      type: 'component',
+      repeatable: !!def.repeatable,
+      component: def.component,
+    };
+    if (def.required) attr.required = true;
+    if (def.min !== undefined) attr.min = def.min;
+    if (def.max !== undefined) attr.max = def.max;
+    return attr;
+  }
+
+  // Upload plugin → media field. Prefer source allowedTypes; fall back to field-type-map.
   if (def.plugin === 'upload') {
-    const allowedTypes = fieldTypeMap.uploadPluginAllowedTypes?.[fieldName] || ['files', 'images'];
+    const sourceAllowed = def.allowedTypes;
+    const mapAllowed = fieldTypeMap.uploadPluginAllowedTypes?.[`${ctName}.${fieldName}`];
+    const allowedTypes = sourceAllowed || mapAllowed || ['files', 'images', 'videos'];
     return {
       type: 'media',
       allowedTypes,
-      multiple: !!def.collection, // "model" = single file, "collection" = multiple files
+      multiple: !!def.collection, // model = single, collection = multiple
     };
   }
 
-  // Relation to another content type (has collection or model, but NOT upload plugin)
+  // Relation to another content type
   if (def.collection || (def.model && !def.type)) {
     const target = def.collection || def.model;
     const relationType = def.collection ? 'manyToMany' : 'manyToOne';
@@ -107,47 +171,36 @@ function convertAttribute(ctName, fieldName, def, fieldTypeMap, relationGraph) {
       target: targetApi,
     };
 
-    // Determine inversedBy vs mappedBy based on dominance
     if (def.via) {
       if (def.dominant) {
-        // This side owns the join table → inversedBy
         attr.inversedBy = def.via;
       } else {
-        // This side is non-dominant → mappedBy
         attr.mappedBy = def.via;
       }
     }
-
     return attr;
   }
 
-  // Check for field-level override (e.g., article.splash: string → media)
+  // Field-level override (e.g., for Base64-string-as-image fields — empty for ICJIA)
   const overrideKey = `${ctName}.${fieldName}`;
   if (fieldTypeMap.overrides?.[overrideKey]) {
     return { ...fieldTypeMap.overrides[overrideKey].to };
   }
 
-  // Slug fields → uid type with auto-generation from title
+  // Slug → uid auto-generated from title
   if (fieldName === 'slug' && def.type === 'string') {
-    return {
-      type: 'uid',
-      targetField: 'title',
-    };
+    return { type: 'uid', targetField: 'title' };
   }
 
-  // Markdown/body field → richtext for large editing experience in admin
-  if (fieldName === 'markdown' && (def.type === 'text' || def.type === 'richtext')) {
-    return {
-      type: 'richtext',
-    };
+  // markdown/body → richtext for the admin editor experience
+  if ((fieldName === 'markdown' || fieldName === 'body') && (def.type === 'text' || def.type === 'richtext')) {
+    return { type: 'richtext' };
   }
 
-  // Standard typed field — map type and preserve constraints
+  // Standard typed field — map and preserve constraints
   if (def.type) {
     const mappedType = fieldTypeMap.directMappings?.[def.type] || def.type;
     const attr = { type: mappedType };
-
-    // Preserve any field-level constraints from Strapi 3
     if (def.required) attr.required = true;
     if (def.unique) attr.unique = true;
     if (def.default !== undefined) attr.default = def.default;
@@ -157,91 +210,125 @@ function convertAttribute(ctName, fieldName, def, fieldTypeMap, relationGraph) {
     if (def.max !== undefined) attr.max = def.max;
     if (def.enum) attr.enum = def.enum;
     if (def.targetField) attr.targetField = def.targetField;
-
     return attr;
   }
 
-  // Unknown field shape — pass through as-is with a warning
+  // Unknown shape — pass through with a warning
   console.warn(`  WARNING: Unknown attribute shape for ${ctName}.${fieldName}:`, def);
   return def;
 }
 
 /**
- * Generate a complete Strapi 5 schema.json object for one content type.
+ * Generate a Strapi 5 schema for one content type entry from the manifest.
  *
- * The generated schema includes:
- * - collectionType kind with plural collectionName
- * - info block with singularName, pluralName, displayName, description
- * - draftAndPublish: false
- * - legacyId as first attribute (string, unique)
- * - All scalar/media fields from the Strapi 3 model (converted)
- * - All relation fields at the end (converted with correct inversedBy/mappedBy)
- *
- * @param {string} ctName - Content type name (e.g., "article")
- * @param {Object} model - Parsed Strapi 3 .settings.json for this content type
- * @param {Object} fieldTypeMap - Parsed field-type-map.json
- * @param {Map} relationGraph - Relation graph from buildRelationGraph()
- * @returns {Object} Complete Strapi 5 schema.json object
+ * Schema layout:
+ *   - kind: 'collectionType' | 'singleType'
+ *   - collectionName: from manifest.sqlTable (matches the source DB table)
+ *   - info: { singularName, pluralName, displayName, description }
+ *   - options: { draftAndPublish }
+ *   - attributes: title (if any), legacyId (collections only), scalars, relations, components
  */
-function generateSchema(ctName, model, fieldTypeMap, relationGraph) {
-  const pluralName = ctName + 's';
-  const displayName = ctName.charAt(0).toUpperCase() + ctName.slice(1);
+function generateContentTypeSchema(entry, fieldTypeMap) {
+  const { manifest, model } = entry;
+  const ctName = manifest.name;
+  const isSingle = manifest.kind === 'singleType';
+
+  const singularName = manifest.singularName || ctName;
+  let pluralName = camelToKebab(manifest.queryName || ctName);
+  // Strapi 5 requires pluralName != singularName even for singletons.
+  // For Home (queryName "home"), force "homes".
+  if (pluralName === singularName) {
+    pluralName = `${singularName}s`;
+  }
+  const displayName = titleCase(ctName);
+  // manifest.notes are developer notes, not user-facing descriptions.
+  // Leave description empty unless explicitly set in the source model's info block.
+  const description = model?.info?.description || '';
+  const draftAndPublish = manifest.draftAndPublish ?? model?.options?.draftAndPublish ?? false;
 
   const schema = {
-    kind: 'collectionType',
-    collectionName: pluralName,
+    kind: isSingle ? 'singleType' : 'collectionType',
+    collectionName: manifest.sqlTable || pluralName.replace(/-/g, '_'),
     info: {
-      singularName: ctName,
+      singularName,
       pluralName,
       displayName,
-      description: CONTENT_TYPE_DESCRIPTIONS[ctName] || '',
+      description,
     },
     options: {
-      draftAndPublish: false,
+      draftAndPublish,
     },
     attributes: {},
   };
 
-  // Separate scalar/media fields from relations for ordering
   const scalarAttrs = {};
   const relationAttrs = {};
+  const componentAttrs = {};
 
-  for (const [fieldName, def] of Object.entries(model.attributes || {})) {
-    const converted = convertAttribute(ctName, fieldName, def, fieldTypeMap, relationGraph);
+  for (const [fieldName, rawDef] of Object.entries(model?.attributes || {})) {
+    if (SELF_REF_DROPS.has(`${ctName}.${fieldName}`)) continue;
 
-    if (converted.type === 'relation') {
-      relationAttrs[fieldName] = converted;
-    } else {
-      scalarAttrs[fieldName] = converted;
-    }
+    const def = applyIncompleteRelationFix(ctName, fieldName, rawDef, fieldTypeMap);
+    const converted = convertAttribute(ctName, fieldName, def, fieldTypeMap);
+
+    if (converted.type === 'relation') relationAttrs[fieldName] = converted;
+    else if (converted.type === 'component') componentAttrs[fieldName] = converted;
+    else scalarAttrs[fieldName] = converted;
   }
 
-  // Title first (Strapi 5 uses the first string field as the relation display label),
-  // then legacyId, then remaining scalars, then relations
+  // Title first if present (Strapi 5 uses the first string field as the relation display label)
   if (scalarAttrs.title) {
     schema.attributes.title = scalarAttrs.title;
     delete scalarAttrs.title;
   }
 
-  schema.attributes.legacyId = {
-    type: 'string',
-    unique: true,
-  };
+  // legacyId on collection types only (singletons have no array semantics, no idempotency need)
+  if (!isSingle) {
+    schema.attributes.legacyId = {
+      type: 'integer',
+      unique: true,
+      configurable: false,
+    };
+  }
 
-  Object.assign(schema.attributes, scalarAttrs, relationAttrs);
+  // Scalars, then components, then relations
+  Object.assign(schema.attributes, scalarAttrs, componentAttrs, relationAttrs);
 
   return schema;
 }
 
 /**
- * Generate minimal Strapi 5 boilerplate files (route, controller, service)
- * that are required alongside each schema.json.
- *
- * Uses CommonJS syntax (`require`/`module.exports`) because Strapi 5 projects
- * default to CommonJS (no `"type": "module"` in their package.json).
- *
- * @param {string} ctName - Content type name (e.g., "article")
- * @returns {{route: string, controller: string, service: string}} File contents as strings
+ * Generate a Strapi 5 component schema from a manifest+model entry.
+ * Strapi 5 components are stored at src/components/<category>/<name>.json.
+ */
+function generateComponentSchema(entry, fieldTypeMap) {
+  const { manifest, model } = entry;
+  const collectionName = `components_${manifest.category.replace(/-/g, '_')}_${manifest.name.replace(/-/g, '_')}s`;
+
+  const schema = {
+    collectionName,
+    info: {
+      displayName: titleCase(manifest.name),
+      description: '',
+      icon: 'cube',
+    },
+    options: {},
+    attributes: {},
+  };
+
+  // For components, "this" is the component itself — there's no host content type;
+  // pass an empty incompleteRelations key by using a dummy ctName.
+  const dummyCtName = `${manifest.category}.${manifest.name}`;
+  for (const [fieldName, rawDef] of Object.entries(model?.attributes || {})) {
+    schema.attributes[fieldName] = convertAttribute(dummyCtName, fieldName, rawDef, fieldTypeMap);
+  }
+
+  return schema;
+}
+
+/**
+ * Generate minimal Strapi 5 boilerplate (route, controller, service) for a content type.
+ * Uses CommonJS to match Strapi 5 project defaults.
  */
 function generateBoilerplate(ctName) {
   const uid = `api::${ctName}.${ctName}`;
@@ -253,70 +340,81 @@ function generateBoilerplate(ctName) {
 }
 
 /**
- * Build a field map entry recording how each Strapi 3 field was converted.
- * This is written to config/field-map.json for reference and debugging.
- *
- * @param {string} ctName - Content type name
- * @param {Object} model - Original Strapi 3 model
- * @param {Object} schema - Generated Strapi 5 schema
- * @param {Object} fieldTypeMap - Parsed field-type-map.json
- * @returns {Object} Map of fieldName → { strapi3Type, strapi5Type, overridden, added? }
+ * Build a per-field mapping entry recording how each Strapi 3 field was converted.
+ * Written to migration/config/field-map.json for reference and debugging.
  */
-function buildFieldMapEntry(ctName, model, schema, fieldTypeMap) {
-  const entry = {};
-  for (const [fieldName, def] of Object.entries(model.attributes || {})) {
-    const strapi3Type = def.type || (def.plugin === 'upload' ? 'upload-plugin' : 'relation');
+function buildFieldMapEntry(entry, schema, fieldTypeMap) {
+  const { manifest, model } = entry;
+  const result = {};
+  for (const [fieldName, def] of Object.entries(model?.attributes || {})) {
+    if (SELF_REF_DROPS.has(`${manifest.name}.${fieldName}`)) {
+      result[fieldName] = { strapi3Type: def.type || 'relation', strapi5Type: 'DROPPED', dropped: true };
+      continue;
+    }
+    const strapi3Type =
+      def.type ||
+      (def.plugin === 'upload' ? 'upload-plugin' : 'relation');
     const strapi5Attr = schema.attributes[fieldName];
     const strapi5Type = strapi5Attr?.type || 'unknown';
-    const overrideKey = `${ctName}.${fieldName}`;
+    const overrideKey = `${manifest.name}.${fieldName}`;
     const overridden = !!fieldTypeMap.overrides?.[overrideKey];
 
-    entry[fieldName] = {
-      strapi3Type,
-      strapi5Type,
-      overridden,
-    };
+    result[fieldName] = { strapi3Type, strapi5Type, overridden };
   }
-  // Include the migration-added legacyId field
-  entry.legacyId = {
-    strapi3Type: null,
-    strapi5Type: 'string',
-    overridden: false,
-    added: true,
-  };
-  return entry;
+  // Always-injected legacyId for collection types
+  if (manifest.kind !== 'singleType') {
+    result.legacyId = { strapi3Type: null, strapi5Type: 'integer', overridden: false, added: true };
+  }
+  return result;
 }
 
 /**
- * Main entry point. Generates all Strapi 5 schemas from Strapi 3 models.
+ * Main entry point. Generates all Strapi 5 schemas from the normalized source.
  *
- * For each content type, produces:
- * - `schema`: A complete Strapi 5 schema.json object
- * - `boilerplate`: Route, controller, and service file contents (strings)
- * - `fieldMap`: Per-field mapping details for debugging/reference
- *
- * @param {Object} strapi3Models - Parsed Strapi 3 models, keyed by content type name.
- *   Each value is a parsed `.settings.json` object with `attributes`, `info`, etc.
- * @param {Object} fieldTypeMap - Parsed `config/field-type-map.json` containing:
- *   - `directMappings`: {strapi3Type → strapi5Type} for standard field types
- *   - `overrides`: {"contentType.field" → {from, to, reason}} for special-case fields
- *   - `uploadPluginAllowedTypes`: {fieldName → string[]} for upload plugin fields
- * @returns {Object} Keyed by content type name, each value contains:
- *   - `schema` {Object} - Strapi 5 schema.json object
- *   - `boilerplate` {{route: string, controller: string, service: string}} - File contents
- *   - `fieldMap` {Object} - Per-field conversion details
+ * @param {{contentTypes: Array, components: Array}} sourceSchema
+ *   Output of 01a-introspect.js — the normalized {manifest, model} pairs.
+ * @param {Object} fieldTypeMap - Parsed field-type-map.json
+ * @returns {{contentTypes, components, relationGraph}}
+ *   - contentTypes: { [name]: { schema, boilerplate, fieldMap } }
+ *   - components:   { [category.name]: { category, name, schema } }
+ *   - relationGraph: array of dominance entries, dominant edges first
  */
-export function generateStrapi5Schemas(strapi3Models, fieldTypeMap) {
-  const relationGraph = buildRelationGraph(strapi3Models);
-  const result = {};
+export function generateStrapi5Schemas(sourceSchema, fieldTypeMap) {
+  const relationGraphMap = buildRelationGraph(sourceSchema.contentTypes);
 
-  for (const [ctName, model] of Object.entries(strapi3Models)) {
-    const schema = generateSchema(ctName, model, fieldTypeMap, relationGraph);
-    const boilerplate = generateBoilerplate(ctName);
-    const fieldMap = buildFieldMapEntry(ctName, model, schema, fieldTypeMap);
-
-    result[ctName] = { schema, boilerplate, fieldMap };
+  const contentTypes = {};
+  for (const entry of sourceSchema.contentTypes) {
+    if (!entry.model) continue;
+    const schema = generateContentTypeSchema(entry, fieldTypeMap);
+    const boilerplate = generateBoilerplate(entry.manifest.name);
+    const fieldMap = buildFieldMapEntry(entry, schema, fieldTypeMap);
+    contentTypes[entry.manifest.name] = { schema, boilerplate, fieldMap };
   }
 
-  return result;
+  const components = {};
+  for (const entry of sourceSchema.components) {
+    if (!entry.model) continue;
+    const schema = generateComponentSchema(entry, fieldTypeMap);
+    const key = `${entry.manifest.category}.${entry.manifest.name}`;
+    components[key] = {
+      category: entry.manifest.category,
+      name: entry.manifest.name,
+      schema,
+    };
+  }
+
+  // Augment relation graph with the manifest's dominantRelations[] (already curated)
+  // and serialize for Phase 4. Each entry has the info Phase 4's relation engine needs.
+  const relationGraph = [];
+  for (const entry of relationGraphMap.values()) {
+    relationGraph.push(entry);
+  }
+  // Sort: dominant first, then by content type, then field
+  relationGraph.sort((a, b) => {
+    if (a.dominant !== b.dominant) return a.dominant ? -1 : 1;
+    if (a.contentType !== b.contentType) return a.contentType.localeCompare(b.contentType);
+    return a.field.localeCompare(b.field);
+  });
+
+  return { contentTypes, components, relationGraph };
 }

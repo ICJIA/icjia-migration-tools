@@ -41,8 +41,6 @@
     "slide.image": ["images", "files", "videos"]
   },
   "incompleteRelations": {
-    "_comment": "Source-side relations missing `via` and/or `dominant` flags. Phase 1 schema generator injects these defaults so Strapi 5 schemas are valid.",
-    "policy.tags": { "via": "policies", "dominant": true, "collection": "tag" },
-    "required-form.tags": { "via": "requiredForms", "dominant": true, "collection": "tag" }
+    "_comment": "DOCUMENTATION ONLY. Policy.tags and RequiredForm.tags are intentionally one-sided in the Strapi 3 source ({collection: tag} with no via/dominant). Tag has no corresponding policies/requiredForms fields. Strapi 5 supports one-sided manyToMany — schema generator emits them as relations without inversedBy/mappedBy. Earlier attempts to inject inversedBy:'policies' broke Strapi 5 because Tag had no field for it to point at."
   }
 }
