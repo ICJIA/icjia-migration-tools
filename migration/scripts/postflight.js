@@ -226,9 +226,11 @@ async function main() {
       checksTotal: validationReport.checksRun,
     } : null,
     audit: auditReport ? {
-      records: auditReport.summary?.totalRecords ?? null,
-      fields: auditReport.summary?.totalFieldComparisons ?? null,
-      categories: auditReport.summary?.categoryCounts ?? null,
+      records: auditReport.summary?.totalRecordsCompared ?? null,
+      fields: auditReport.summary?.totalFieldsCompared ?? null,
+      categories: auditReport.summary?.findings ?? null,
+      cleanRecords: auditReport.summary?.cleanRecords ?? null,
+      recordsWithFindings: auditReport.summary?.recordsWithFindings ?? null,
     } : null,
     reports: {
       validation: existsSync(path.resolve(ROOT, 'migration/data/validation-report.json'))
@@ -277,18 +279,21 @@ async function main() {
 
   // Audit summary
   if (auditReport && auditReport.summary) {
-    const cats = auditReport.summary.categoryCounts || {};
+    const f = auditReport.summary.findings || {};
     log(`${BOLD}Parity audit (Phase 6):${RESET}`);
-    if (auditReport.summary.totalRecords) {
-      log(`  Records compared:  ${formatNumber(auditReport.summary.totalRecords)}`);
+    if (auditReport.summary.totalRecordsCompared) {
+      log(`  Records compared:  ${formatNumber(auditReport.summary.totalRecordsCompared)}`);
     }
-    if (auditReport.summary.totalFieldComparisons) {
-      log(`  Field comparisons: ${formatNumber(auditReport.summary.totalFieldComparisons)}`);
+    if (auditReport.summary.totalFieldsCompared) {
+      log(`  Fields compared:   ${formatNumber(auditReport.summary.totalFieldsCompared)}`);
     }
-    log(`  ${GREEN}OK:${RESET}       ${formatNumber(cats.OK || 0)}`);
-    log(`  ${CYAN}EXPECTED:${RESET} ${formatNumber(cats.EXPECTED || 0)}`);
-    log(`  ${YELLOW}INFO:${RESET}     ${formatNumber(cats.INFO || 0)}`);
-    log(`  ${cats.ERROR > 0 ? RED : DIM}ERROR:${RESET}    ${formatNumber(cats.ERROR || 0)}${cats.ERROR === 0 ? `  ${GREEN}(perfect parity)${RESET}` : ''}`);
+    if (auditReport.summary.cleanRecords !== undefined) {
+      log(`  Clean records:     ${formatNumber(auditReport.summary.cleanRecords)}`);
+    }
+    log(`  ${GREEN}OK:${RESET}       ${formatNumber(f.OK || 0)}`);
+    log(`  ${CYAN}EXPECTED:${RESET} ${formatNumber(f.EXPECTED || 0)}`);
+    log(`  ${YELLOW}INFO:${RESET}     ${formatNumber(f.INFO || 0)}`);
+    log(`  ${f.ERROR > 0 ? RED : DIM}ERROR:${RESET}    ${formatNumber(f.ERROR || 0)}${f.ERROR === 0 ? `  ${GREEN}(perfect parity)${RESET}` : ''}`);
     log('');
   }
 

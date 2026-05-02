@@ -387,6 +387,107 @@ pnpm migrate:phase04
 
 ---
 
+## Deploying to production
+
+Two viable paths to get the migrated content onto the production Strapi 5 instance. The plan and tooling are wired for **Option A**; Option B is documented as an alternative.
+
+**Always migrate locally first** — regardless of which cutover path you take. The local migration pass is where you shake out schema bugs, validate counts, audit field-by-field parity, and review the audit-report.md with stakeholders. Don't run any phase against prod until `pnpm postflight` is green locally.
+
+### Option A: API-to-API to remote prod (recommended)
+
+Re-run the migration phases pointed at the production Strapi 5 instance. Same scripts, same idempotency — only the URLs change.
+
+**Prerequisites:**
+- Production Strapi 5 already deployed and reachable (this tool does not deploy Strapi 5 itself)
+- A Full-Access API token created in production Strapi 5 admin
+- SSH access to the prod server for Phase 4c (timestamp restoration via direct SQLite UPDATE — timestamps can't be set via REST)
+- The same Strapi 5 version + Node version as your local install (so generated schemas behave identically)
+
+**Procedure:**
+
+```bash
+# 1. Activate the production config profile
+cp config.prod.js config.js
+
+# 2. Edit config.prod.js (or set env vars) with the real prod values
+#    - strapi5.graphqlUrl
+#    - strapi5.apiUrl
+#    - SSH details for 04c-fix-timestamps-remote.js
+export STRAPI5_TOKEN="<prod-full-access-token>"
+
+# 3. Run preflight against prod to confirm everything is reachable
+pnpm preflight
+
+# 4. (Recommended) start with phases 1 + 2 only against prod to validate
+pnpm migrate:phase01    # generates schemas, copies to prod Strapi 5 src/
+pnpm migrate:phase02    # extracts content (read-only on Strapi 3)
+
+# 5. Run the rest
+pnpm migrate:phase03    # download + upload media (slow — ~30–60 min on WAN)
+pnpm migrate:phase04    # load + link relations + SSH timestamp fix
+
+# 6. Final sign-off
+pnpm postflight         # validate + audit + report against prod
+```
+
+**Tradeoffs:**
+- Pro: Idempotent — if a network blip aborts a phase, re-run it. Files already uploaded (matched by hash) and records already loaded (matched by `legacyId`) are skipped.
+- Pro: Each phase is independently verifiable against the running prod system.
+- Pro: Same code path as dev — no special "production migration" mode to debug.
+- Con: Slow — file uploads and record creates happen over WAN at the configured throttle (`requestDelayMs`).
+- Con: Prod Strapi 5 is doing real work for hours; cache populates and search indexes update during the migration.
+
+### Option B: Migrate locally, SFTP the result to prod
+
+Run the full migration into a local Strapi 5. Once `pnpm postflight` is fully green, stop prod Strapi 5, rsync the local `.tmp/data.db` and `public/uploads/` into prod, and restart.
+
+**Prerequisites:**
+- Production Strapi 5 install with **identical** Strapi 5 version + Node version to your local install (otherwise SQLite document IDs or schema artifacts may not transfer cleanly)
+- A scheduled maintenance window (5–15 minutes for the cutover itself)
+- A tested rollback plan (e.g., snapshot of `data.db` + `public/uploads/` before swapping)
+- SSH/SFTP access to the prod server
+
+**Procedure:**
+
+```bash
+# 1. Migrate locally end-to-end against config.dev.js (already done)
+pnpm postflight   # confirm green
+
+# 2. (On prod) snapshot current state for rollback
+ssh prod "cd /var/www/icjia-public-strapi5 && \
+  cp .tmp/data.db .tmp/data.db.pre-migration && \
+  tar czf public/uploads-pre-migration.tar.gz public/uploads/"
+
+# 3. (On prod) stop Strapi 5
+ssh prod "pm2 stop icjia-public-strapi5"
+
+# 4. (Locally) rsync the migrated data.db and uploads
+rsync -avz ../icjia-public-strapi5/.tmp/data.db \
+  prod:/var/www/icjia-public-strapi5/.tmp/data.db
+rsync -avz --delete ../icjia-public-strapi5/public/uploads/ \
+  prod:/var/www/icjia-public-strapi5/public/uploads/
+
+# 5. (On prod) restart Strapi 5 and smoke-test
+ssh prod "pm2 start icjia-public-strapi5"
+curl https://prod-host/api/posts?pagination[pageSize]=1
+```
+
+**Tradeoffs:**
+- Pro: Cutover is one atomic rsync, ~5–15 minutes total.
+- Pro: Production server is untouched until the moment of cutover.
+- Pro: All migration work happens on local disk at full speed.
+- Con: One-shot — once swapped, "fix and rerun" means restoring from snapshot, not re-running phases.
+- Con: Local and prod Strapi/Node versions must match exactly.
+- Con: No incremental sync option once cut over (the sibling's `pnpm sync` works only via Option A).
+
+### Recommendation
+
+Stick with **Option A** unless you have a hard reason for atomic cutover (e.g., a strict maintenance window, prod box CPU-constrained). Option A is the sibling tool's proven pattern, fully resumable, and easier to verify continuously. Option B is fine for a confident team with a tested cutover playbook.
+
+For both paths, **never skip the local migration step** — that's where every issue is shaken out before touching prod.
+
+---
+
 ## Repository layout
 
 ```

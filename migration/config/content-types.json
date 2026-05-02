@@ -144,7 +144,7 @@
       "singularName": "required-form",
       "kind": "collectionType",
       "queryName": "requiredForms",
-      "sqlTable": "required-forms",
+      "sqlTable": "required_forms",
       "draftAndPublish": true,
       "hasDrafts": false,
       "skipDefault": false,

@@ -50,34 +50,33 @@ const SKIP = `${DIM}SKIP${RESET}`;
 
 const argv = new Set(process.argv.slice(2));
 const SKIP_STRAPI5 = argv.has('--skip-strapi5');
+const SKIP_CHECKLIST = argv.has('--skip-checklist') || argv.has('--no-checklist');
 const JSON_OUTPUT = argv.has('--json');
 
-// Expected source files (mirrored from manifest)
-const EXPECTED_CONTENT_TYPES = [
-  'biography', 'build', 'config', 'event', 'form', 'grant', 'home',
-  'job', 'meeting', 'page', 'policy', 'post', 'program', 'publication',
-  'regulation', 'required-form', 'rule', 'tag', 'unit',
-];
+// Manifest-derived expectations (populated by loadManifest())
+let EXPECTED_CONTENT_TYPES = [];
+let EXPECTED_COMPONENTS = [];
+let EXPECTED_SQLITE_TABLES = [];
 
-const EXPECTED_COMPONENTS = [
-  ['banner', 'banner'],
-  ['button', 'button'],
-  ['carousel', 'carousel'],
-  ['clickthrough', 'clickthrough'],
-  ['countdown', 'countdown'],
-  ['event', 'add-event'],
-  ['external', 'external-url'],
-  ['menu-item', 'menu-item'],
-  ['slide', 'slide'],
-  ['slider-button', 'slider-button'],
-];
-
-const EXPECTED_SQLITE_TABLES = [
-  'publications', 'meetings', 'jobs', 'forms', 'posts', 'biographies',
-  'grants', 'programs', 'pages', 'tags', 'required_forms', 'units',
-  'policies', 'rules', 'events', 'configs', 'regulations', 'homes',
-  'upload_file',
-];
+async function loadManifest() {
+  // Try to read the manifest at the canonical path before config is loaded
+  const manifestPath = path.resolve(ROOT, 'migration/config/content-types.json');
+  if (!existsSync(manifestPath)) return null;
+  try {
+    const m = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+    EXPECTED_CONTENT_TYPES = (m.contentTypes || []).map((c) => c.name);
+    EXPECTED_COMPONENTS = (m.components || []).map((c) => [c.category, c.name]);
+    const tables = new Set();
+    for (const c of m.contentTypes || []) {
+      if (c.sqlTable) tables.add(c.sqlTable);
+    }
+    tables.add('upload_file');
+    EXPECTED_SQLITE_TABLES = [...tables];
+    return m;
+  } catch {
+    return null;
+  }
+}
 
 const checks = [];
 
@@ -354,10 +353,15 @@ async function checkStrapi3Graphql() {
   if (!CONFIG) return { status: 'SKIP', detail: 'config not loaded' };
   const url = CONFIG.strapi3.graphqlUrl;
   try {
+    // Query a Strapi-specific type (Tag is small, present, public).
+    // Generic introspection would pass on any GraphQL server — querying a
+    // known content type confirms it's actually the ICJIA Strapi 3 endpoint.
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: '{ __schema { queryType { name } } }' }),
+      body: JSON.stringify({
+        query: '{ tagsConnection { aggregate { count } } }',
+      }),
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) {
@@ -372,17 +376,18 @@ async function checkStrapi3Graphql() {
       return {
         status: 'FAIL',
         detail: `GraphQL error: ${json.errors[0]?.message}`,
-        guidance: `Check that the endpoint accepts introspection queries`,
+        guidance: `Endpoint reachable but doesn't expose a 'tags' query — check that ${url} is the ICJIA Strapi 3 endpoint`,
       };
     }
-    if (!json.data?.__schema?.queryType?.name) {
+    const count = json.data?.tagsConnection?.aggregate?.count;
+    if (typeof count !== 'number') {
       return {
         status: 'FAIL',
-        detail: 'introspection returned unexpected shape',
-        guidance: `Verify ${url} is a Strapi 3 GraphQL endpoint`,
+        detail: 'unexpected response shape',
+        guidance: `Verify ${url} is a Strapi 3 GraphQL endpoint with public Tag access`,
       };
     }
-    return { detail: `${url} reachable, introspection OK` };
+    return { detail: `${url} reachable, ${count} tags visible` };
   } catch (err) {
     return {
       status: 'FAIL',
@@ -441,23 +446,38 @@ async function checkStrapi5Auth() {
         `Then: export STRAPI5_TOKEN="<token>"`,
     };
   }
+  // Use /api/upload/files since the upload plugin is core in Strapi 5 and
+  // returns a deterministic shape. If it 404s (plugin disabled), fall back
+  // to /api/users/me which is universally available with Full-Access tokens.
+  const apiUrl = CONFIG.strapi5.apiUrl;
+  const headers = { Authorization: `Bearer ${token}` };
   try {
-    const res = await fetch(`${CONFIG.strapi5.apiUrl}/api/upload/files?pagination[pageSize]=1`, {
-      headers: { Authorization: `Bearer ${token}` },
+    let res = await fetch(`${apiUrl}/api/upload/files?pagination[pageSize]=1`, {
+      headers,
       signal: AbortSignal.timeout(10000),
     });
+
+    // 404 likely means upload plugin is disabled — try a more universal endpoint
+    if (res.status === 404) {
+      res = await fetch(`${apiUrl}/api/users/me`, {
+        headers,
+        signal: AbortSignal.timeout(10000),
+      });
+    }
+
     if (res.status === 401 || res.status === 403) {
       return {
         status: 'FAIL',
         detail: `token rejected (HTTP ${res.status})`,
-        guidance: `Token may be invalid or insufficient. Regenerate a Full-Access token in Strapi 5 admin.`,
+        guidance: `Token may be invalid or have insufficient permissions.\n     ` +
+          `Regenerate a Full-Access token in Strapi 5 admin: Settings → API Tokens`,
       };
     }
     if (!res.ok) {
       return {
         status: 'WARN',
-        detail: `unexpected HTTP ${res.status} from /api/upload/files`,
-        guidance: `Token works but endpoint returned non-2xx. May be safe to proceed.`,
+        detail: `auth probe returned HTTP ${res.status}`,
+        guidance: `Token may work but probe endpoint isn't reachable. Migration phases may still succeed; watch for 401/403 in Phase 4.`,
       };
     }
     return { detail: 'API token authenticated successfully' };
@@ -515,13 +535,75 @@ async function checkStrapi5Project() {
 // Main
 // ─────────────────────────────────────────────────────────────────────
 
+function printChecklist() {
+  if (JSON_OUTPUT || SKIP_CHECKLIST) return;
+
+  // Pull current Strapi 5 URL so the checklist reflects the actual configured port
+  const s5Url = process.env.STRAPI5_API_URL || 'http://localhost:1338';
+  const tokenSet = !!process.env.STRAPI5_TOKEN;
+
+  const box = (s) => `${CYAN}│${RESET} ${s}`;
+  const bar = `${CYAN}├──────────────────────────────────────────────────────────────────${RESET}`;
+  const top = `${CYAN}┌──────────────────────────────────────────────────────────────────${RESET}`;
+  const bot = `${CYAN}└──────────────────────────────────────────────────────────────────${RESET}`;
+
+  console.log('');
+  console.log(top);
+  console.log(box(`${BOLD}Before you start — make sure you have:${RESET}`));
+  console.log(bar);
+  console.log(box(''));
+  console.log(box(`  ${BOLD}1. Strapi 5 instance running${RESET}`));
+  console.log(box(`     Configured URL: ${CYAN}${s5Url}${RESET}`));
+  console.log(box(`     Override port via env: ${DIM}STRAPI5_API_URL=http://localhost:1339${RESET}`));
+  console.log(box(`     To start: ${DIM}cd ../icjia-public-strapi5 && pnpm develop${RESET}`));
+  console.log(box(''));
+  console.log(box(`  ${BOLD}2. Strapi 5 admin user created${RESET}`));
+  console.log(box(`     Visit ${CYAN}${s5Url}/admin${RESET} — first-launch flow creates one`));
+  console.log(box(''));
+  console.log(box(`  ${BOLD}3. Strapi 5 API token (Full Access)${RESET}`));
+  console.log(box(`     ${tokenSet ? GREEN + 'STRAPI5_TOKEN is set' + RESET : YELLOW + 'STRAPI5_TOKEN is NOT set' + RESET}`));
+  console.log(box(`     Strapi 5 admin → Settings → API Tokens → Create new`));
+  console.log(box(`     Then: ${DIM}export STRAPI5_TOKEN="<your-token>"${RESET}`));
+  console.log(box(''));
+  console.log(box(`  ${BOLD}4. Strapi 3 source files in repo${RESET}`));
+  console.log(box(`     Path: ${CYAN}docs/strapi-3-source/${RESET}`));
+  console.log(box(`     Should contain: ${DIM}api/ components/ config/ data.db${RESET}`));
+  console.log(box(`     ${DIM}(data.db is gitignored — each dev needs to obtain it separately)${RESET}`));
+  console.log(box(''));
+  console.log(box(`  ${BOLD}5. Network access to ${CYAN}agency.icjia-api.cloud${RESET}`));
+  console.log(box(`     For Phase 2 GraphQL extraction + Phase 3 file downloads`));
+  console.log(box(`     (~2,110 media files, total ~1–2 GB)`));
+  console.log(box(''));
+  console.log(box(`  ${BOLD}6. Config profile selected${RESET}`));
+  console.log(box(`     ${DIM}cp config.dev.js config.js${RESET}   (local Strapi 5)`));
+  console.log(box(`     ${DIM}cp config.prod.js config.js${RESET}  (production Strapi 5)`));
+  console.log(box(`     Or: ${DIM}MIGRATION_ENV=dev pnpm preflight${RESET}`));
+  console.log(box(''));
+  console.log(box(`  ${BOLD}7. ~3 GB free disk space${RESET}`));
+  console.log(box(`     Media files + JSON extracts + ID maps`));
+  console.log(box(''));
+  console.log(bot);
+  console.log('');
+  console.log(`${DIM}(Pass --skip-checklist to suppress this screen.)${RESET}`);
+  console.log('');
+}
+
 async function main() {
   if (!JSON_OUTPUT) {
     console.log('');
     console.log(`${BOLD}ICJIA Public Website Migration — Preflight Check${RESET}`);
     console.log(DIM + 'Verifies your environment before any migration phase runs.' + RESET);
-    console.log('');
   }
+
+  // Load manifest before any check needs it
+  const manifest = await loadManifest();
+  if (!manifest && !JSON_OUTPUT) {
+    console.log('');
+    console.log(`${YELLOW}Warning:${RESET} could not load migration/config/content-types.json — ` +
+      `expected types/tables/components will not be validated against the manifest.`);
+  }
+
+  printChecklist();
 
   printSection('Environment');
   await check('environment', 'Node version', checkNode);
