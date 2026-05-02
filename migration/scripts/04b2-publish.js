@@ -75,13 +75,12 @@ async function main() {
   console.log('');
 
   const manifest = await loadManifest();
-  const client = new RestClient({
-    baseUrl: config.strapi5.apiUrl,
+  const client = new RestClient(config.strapi5.apiUrl, {
     token: config.strapi5.token,
-    timeoutMs: config.strapi5.timeoutMs ?? 30000,
+    timeoutMs: config.settings?.requestTimeoutMs ?? 30000,
   });
 
-  const delay = config.strapi5.requestDelayMs ?? 100;
+  const delay = config.settings?.requestDelayMs ?? 100;
   const transformedDir = path.resolve(ROOT, config.paths.transformedData || 'migration/data/transformed');
   const mapsDir = path.resolve(ROOT, config.paths.maps || 'migration/data/maps');
 
@@ -91,6 +90,12 @@ async function main() {
     if (ct.skipDefault) continue;
     if (ct.kind === 'singleType') continue; // singletons handled differently; PUT is direct
     if (TYPE_FILTER && ct.name !== TYPE_FILTER) continue;
+    // Content types with draftAndPublish: false don't have a publish action;
+    // their records are always-published in Strapi 5. Skip them.
+    if (ct.draftAndPublish === false) {
+      console.log(`${DIM}— ${ct.name}: draftAndPublish=false in source — skipping (no draft/published distinction)${RESET}`);
+      continue;
+    }
 
     const plural = ct.queryName || `${ct.name}s`;
     const transformedPath = path.join(transformedDir, `${plural}.json`);
@@ -130,9 +135,12 @@ async function main() {
         continue;
       }
 
-      const apiPath = `/api/${restPluralName(ct)}/${entry.documentId}/actions/publish`;
+      // Strapi 5 publishes via PUT with ?status=published query param and an
+      // empty data body. The /actions/publish route exists in the admin
+      // plugin only — not on the public REST API.
+      const apiPath = `/api/${restPluralName(ct)}/${entry.documentId}?status=published`;
       try {
-        await client.post(apiPath, {});
+        await client.put(apiPath, {});
         stats.published++;
         if (delay > 0) await sleep(delay);
       } catch (err) {

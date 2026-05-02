@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2] - 2026-05-02
+
+### Fixed — source drafts no longer auto-published in Strapi 5
+
+- `04-load.js` now POSTs source drafts with `?status=draft` query param.
+  Without it, Strapi 5 v5+ creates **both** a draft and a published row on
+  every POST regardless of `publishedAt: null` in the body, silently
+  publishing source drafts with the migration timestamp.
+- `04b2-publish.js`: switched from `POST /api/<plural>/<docId>/actions/publish`
+  to `PUT /api/<plural>/<docId>?status=published` with empty body. The
+  `/actions/publish` route is admin-only and returns 405 on the public
+  REST API; the `?status=published` PUT is the documented public path.
+- `04b2-publish.js`: now skips content types where `draftAndPublish: false`
+  in source (e.g., `tag`, `config`). Those don't have a draft/published
+  distinction, so the publish action doesn't apply.
+- `04b2-publish.js`: fixed `RestClient` constructor call — was passing an
+  options object as the first arg; constructor expects positional
+  `(baseUrl, options)`.
+
+### Added — PM2 ecosystem file for production
+
+- `install-strapi5.sh` now writes `ecosystem.config.cjs` into the Strapi 5
+  install directory at install time.
+  - App name derived from the install dir basename (e.g.,
+    `icjia-public-strapi5`).
+  - `cwd` set to the absolute install path (so `pm2 start` works from
+    anywhere).
+  - `PORT` matches the `--port` flag (default 1337).
+  - `NODE_ENV=production`, `max_memory_restart: 512M`, `autorestart: true`.
+  - Log paths commented as overrides; default uses `~/.pm2/logs/<name>-*.log`.
+- Install script's "next steps" output now includes a Production (PM2)
+  section with start/save/startup commands.
+
 ## [0.9.1] - 2026-05-02
 
 ### Fixed — orchestrators no longer skip steps when run non-interactively

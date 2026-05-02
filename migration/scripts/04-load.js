@@ -328,7 +328,13 @@ async function main() {
               updated: true,
             };
           } else {
-            result = await client.post(`/api/${restPluralName(ct)}`, body);
+            // Strapi 5 v5+ POST default creates BOTH a draft and a published
+            // row, even when publishedAt: null is in the body. To preserve a
+            // source draft (publishedAt IS NULL), we have to POST with
+            // ?status=draft so only the draft row is created (no published
+            // row, so no auto-published timestamp clobbering).
+            const statusQuery = isDraft ? '?status=draft' : '';
+            result = await client.post(`/api/${restPluralName(ct)}${statusQuery}`, body);
             map[sourceId] = {
               sourceId,
               legacyId: body.legacyId,
