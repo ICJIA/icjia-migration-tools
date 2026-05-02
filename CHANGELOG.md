@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.5] - 2026-05-02
+
+### Added
+
+- `migrate-full.js` rewritten as a real end-to-end orchestrator.
+  Sequence: preflight → phases 1-7 → postflight. Each stage runs as a
+  child process with stdio inherited so interactive prompts (Phase 4's
+  stop/restart Strapi 5 prompts) work as expected.
+- `--start-from=<stage>` flag to resume from a specific stage
+  (e.g., `pnpm migrate:full --start-from=phase04`).
+- `--skip=<stage>` flag for skipping individual stages
+  (e.g., `pnpm migrate:full --skip=phase07` to skip the report).
+- `--skip-preflight` and `--skip-postflight` shortcuts for the bookend
+  environment checks.
+- Per-stage timing in the final summary plus paths to the generated
+  HTML/DOCX/MD reports.
+
 ## [0.7.4] - 2026-05-02
 
 ### Changed

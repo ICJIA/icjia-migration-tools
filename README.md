@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.7.4 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.7.5 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -84,8 +84,12 @@ pnpm preflight                      # checks Node, deps, configs, source data,
                                     # token validity. Prints PASS/FAIL/WARN
                                     # table with actionable guidance.
 
-# 5. Run the full pipeline
+# 5. Run the full pipeline (preflight → phases 1-7 → postflight)
 pnpm migrate:full
+
+# Or resume from a specific stage if you've run partway already:
+pnpm migrate:full --start-from=phase04
+pnpm migrate:full --skip=phase07
 
 # Or run individual phases (recommended for first run)
 pnpm migrate:phase01                # schema setup
