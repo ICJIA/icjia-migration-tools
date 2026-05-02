@@ -1,25 +1,30 @@
 /**
  * @module 03c-upload-media
- * @description Phase 3c: Upload decoded media files to Strapi 5.
+ * @description Phase 3c: Upload downloaded media files to Strapi 5.
  *
- * Reads the media manifest, uploads each decoded file from `data/media/files/`
- * to Strapi 5's media library via `POST /api/upload`, and records the mapping
- * (filename -> Strapi 5 media ID and URL) in `data/maps/media.json`.
+ * Reads `migration/data/media/uploadfile-manifest.json` (built by 03a) and the
+ * downloaded files from `migration/data/media/files/`. Uploads each via Strapi 5's
+ * `POST /api/upload`, preserving original `name`, `alternativeText`, `caption`,
+ * `width`, and `height`.
  *
- * Idempotent: checks if a file with the same name already exists in Strapi 5
- * before uploading. Safe to re-run after partial completion.
+ * Outputs `migration/data/maps/uploadfile-map.json` mapping the source file's
+ * `id` (and `hash`) to the Strapi 5 upload's `id` and `url`. This map drives:
+ *   - Phase 3f richtext URL rewriting (replace `/uploads/<sourceHash>` with new URL)
+ *   - Phase 4 record loading (substitute UploadFile reference IDs)
+ *
+ * Idempotent — if a hash is already in the map, the upload is skipped.
  *
  * @example
- *   node migration/scripts/03c-upload-media.js
- *
- * Prerequisites:
- * - Phase 3b complete (decoded files in data/media/files/)
- * - Strapi 5 running at configured URL with valid API token
+ *   pnpm phase03c
+ *   node migration/scripts/03c-upload-media.js --skip-orphans
  */
 
 import fs from 'fs/promises';
+import { existsSync, statSync, createReadStream } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+import { loadConfig } from '../lib/load-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -27,225 +32,216 @@ const ROOT = path.resolve(__dirname, '../..');
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-import { loadConfig } from '../lib/load-config.js';
 const config = await loadConfig();
 
-/**
- * Check if a file already exists in the Strapi 5 media library.
- *
- * @param {string} filename - The filename to check
- * @param {string} apiUrl - Strapi 5 API base URL
- * @param {string} token - API token
- * @returns {Promise<Object|null>} Existing media record or null
- */
-async function checkExistingMedia(filename, apiUrl, token) {
-  const url = `${apiUrl}/api/upload/files?filters[name][$eq]=${encodeURIComponent(filename)}`;
-  const res = await fetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` },
-    signal: AbortSignal.timeout(config.settings?.requestTimeoutMs || 30000),
-  });
+const argv = process.argv.slice(2);
+const SKIP_ORPHANS = argv.includes('--skip-orphans');
+const FORCE = argv.includes('--force');
 
-  if (!res.ok) return null;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-  const data = await res.json();
-  if (Array.isArray(data) && data.length > 0) {
-    return data[0];
-  }
-  return null;
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**
- * Upload a file to Strapi 5 media library.
+ * Upload a single file to Strapi 5 /api/upload, with optional metadata.
  *
- * Uses native Node.js FormData (Node 18+) with a Blob created from the file buffer.
- *
- * @param {string} filePath - Absolute path to the file
- * @param {string} filename - Desired filename
- * @param {string} mimeType - MIME type of the file
- * @param {string} apiUrl - Strapi 5 API base URL
- * @param {string} token - API token
- * @returns {Promise<Object>} Strapi 5 media record
+ * @param {string} filePath - Absolute path to the file on disk
+ * @param {Object} sourceMeta - Original UploadFile entry from the manifest
+ * @returns {Promise<Object>} Strapi 5 upload record (id, url, name, hash, ...)
  */
-async function uploadFile(filePath, filename, mimeType, apiUrl, token) {
+async function uploadFile(filePath, sourceMeta) {
   const fileBuffer = await fs.readFile(filePath);
-  const blob = new Blob([fileBuffer], { type: mimeType });
+  const blob = new Blob([fileBuffer], { type: sourceMeta.mime });
 
   const form = new FormData();
-  form.append('files', blob, filename);
+  form.append('files', blob, sourceMeta.name);
 
-  const res = await fetch(`${apiUrl}/api/upload`, {
+  // fileInfo lets Strapi 5 set name, alternativeText, caption per upload
+  const fileInfo = {
+    name: sourceMeta.name,
+    alternativeText: sourceMeta.alternativeText || null,
+    caption: sourceMeta.caption || null,
+  };
+  form.append('fileInfo', JSON.stringify(fileInfo));
+
+  const res = await fetch(`${config.strapi5.apiUrl}/api/upload`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-    },
+    headers: { Authorization: `Bearer ${config.strapi5.token}` },
     body: form,
+    signal: AbortSignal.timeout(config.settings?.requestTimeoutMs || 60000),
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Upload failed (HTTP ${res.status}): ${body}`);
+    const body = await res.text().catch(() => '(no body)');
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
   }
 
   const data = await res.json();
-  if (Array.isArray(data) && data.length > 0) {
-    return data[0];
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new Error('Upload succeeded but response was empty');
   }
-  throw new Error('Upload succeeded but response was empty');
-}
-
-/**
- * Delay for the specified number of milliseconds.
- * @param {number} ms - Milliseconds to wait
- * @returns {Promise<void>}
- */
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return data[0];
 }
 
 async function main() {
-  console.log('=== Phase 3c: Upload Media to Strapi 5 ===\n');
+  console.log(`${BOLD}── Phase 3c: Upload media to Strapi 5 ──${RESET}\n`);
 
-  const apiUrl = config.strapi5.apiUrl;
-  const token = config.strapi5.token;
-  const delayMs = config.settings?.requestDelayMs || 100;
-
-  // Show config
-  console.log('Configuration:');
-  console.log(`  Strapi 5 API:  ${apiUrl}`);
-  console.log(`  Strapi 5 token: ${token ? '(set)' : `${RED}(NOT SET)${RESET}`}`);
-  console.log(`  Upload delay:  ${delayMs}ms`);
-  console.log(`  Media dir:     ${config.paths.media}`);
-  console.log(`  Maps dir:      ${config.paths.maps}`);
-  console.log('');
-
-  if (!token) {
-    console.error(`${RED}ERROR: Strapi 5 API token is not configured.${RESET}`);
-    console.error(`${RED}Set strapi5.token in config.js or STRAPI5_TOKEN env var.${RESET}`);
+  if (!config.strapi5.token) {
+    console.error(`${RED}ERROR${RESET} STRAPI5_TOKEN is not set.`);
+    console.error(`Generate a Full-Access token in Strapi 5 admin and: ${CYAN}export STRAPI5_TOKEN="..."${RESET}`);
     process.exit(1);
   }
 
   const mediaDir = path.resolve(ROOT, config.paths.media);
   const filesDir = path.join(mediaDir, 'files');
+  const manifestPath = path.join(mediaDir, 'uploadfile-manifest.json');
   const mapsDir = path.resolve(ROOT, config.paths.maps);
+  const mapPath = path.join(mapsDir, 'uploadfile-map.json');
 
-  // Load manifest
-  let manifest;
-  try {
-    manifest = JSON.parse(await fs.readFile(path.join(mediaDir, 'manifest.json'), 'utf-8'));
-    console.log(`Loaded manifest: ${manifest.images.length} images`);
-  } catch (err) {
-    console.error(`${RED}ERROR: Cannot read manifest.json: ${err.message}${RESET}`);
-    console.error(`${RED}Run Phase 3 first: pnpm migrate:phase03${RESET}`);
+  if (!existsSync(manifestPath)) {
+    console.error(`${RED}ERROR${RESET} ${path.relative(ROOT, manifestPath)} not found.`);
+    console.error(`Run ${CYAN}node migration/scripts/03a-collect-media.js${RESET} first.`);
     process.exit(1);
   }
 
-  // Load existing media map (for resume support)
-  let mediaMap = {};
   await fs.mkdir(mapsDir, { recursive: true });
-  const mediaMapPath = path.join(mapsDir, 'media.json');
-  try {
-    mediaMap = JSON.parse(await fs.readFile(mediaMapPath, 'utf-8'));
-    console.log(`Loaded existing media map: ${Object.keys(mediaMap).length} entries`);
-  } catch {
-    // No existing map — starting fresh
+
+  const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
+  const allFiles = Object.values(manifest.files);
+
+  // Load existing map for resume support
+  let map = {};
+  if (existsSync(mapPath) && !FORCE) {
+    map = JSON.parse(await fs.readFile(mapPath, 'utf8'));
+    console.log(`Resume: ${Object.keys(map).length} files already in upload map`);
   }
 
-  // Filter to only successfully decoded images (exclude failures)
-  const failedFilenames = new Set((manifest.failures || []).map(f => f.filename));
-  const toProcess = manifest.images.filter(img => !failedFilenames.has(img.filename));
+  let queue = SKIP_ORPHANS
+    ? allFiles.filter((f) => !f.isOrphaned)
+    : allFiles;
 
-  console.log(`\nUploading ${toProcess.length} files to Strapi 5 media library...\n`);
+  console.log(`Configuration:`);
+  console.log(`  Strapi 5 API:       ${CYAN}${config.strapi5.apiUrl}${RESET}`);
+  console.log(`  Files dir:          ${CYAN}${path.relative(ROOT, filesDir)}${RESET}`);
+  console.log(`  Files in queue:     ${queue.length}` +
+    (SKIP_ORPHANS ? ` ${DIM}(orphans skipped)${RESET}` : ` ${DIM}(includes ${manifest.totals.orphans} orphans)${RESET}`));
+  console.log(`  Throttle delay:     ${config.settings?.requestDelayMs || 100}ms`);
+  console.log('');
 
-  // Check Strapi 5 connectivity
+  // Connectivity probe
   try {
-    const healthRes = await fetch(`${apiUrl}/api/upload/files?pagination[pageSize]=1`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-      signal: AbortSignal.timeout(config.settings?.requestTimeoutMs || 30000),
+    const probe = await fetch(`${config.strapi5.apiUrl}/api/upload/files?pagination[pageSize]=1`, {
+      headers: { Authorization: `Bearer ${config.strapi5.token}` },
+      signal: AbortSignal.timeout(10000),
     });
-    if (!healthRes.ok) {
-      throw new Error(`HTTP ${healthRes.status}: ${await healthRes.text()}`);
+    if (!probe.ok && probe.status !== 403) {
+      throw new Error(`HTTP ${probe.status}: ${await probe.text()}`);
     }
-    console.log(`${GREEN}\u2713 Strapi 5 is reachable and API token is valid${RESET}\n`);
+    console.log(`  ${GREEN}OK${RESET} Strapi 5 reachable, token authenticated`);
+    console.log('');
   } catch (err) {
-    console.error(`${RED}ERROR: Cannot connect to Strapi 5: ${err.message}${RESET}`);
-    console.error(`${RED}Ensure Strapi 5 is running at ${apiUrl} with a valid API token.${RESET}`);
+    console.error(`${RED}ERROR${RESET} cannot reach Strapi 5: ${err.message}`);
     process.exit(1);
   }
 
-  let uploadedCount = 0;
-  let skippedCount = 0;
-  let failCount = 0;
+  let uploaded = 0;
+  let skipped = 0;
+  let failed = 0;
+  let totalBytes = 0;
+  const startTime = Date.now();
+  const delay = config.settings?.requestDelayMs || 100;
 
-  for (let i = 0; i < toProcess.length; i++) {
-    const entry = toProcess[i];
-    const progress = `[${i + 1}/${toProcess.length}]`;
+  for (let i = 0; i < queue.length; i++) {
+    const f = queue[i];
 
-    // Skip if already in our map
-    if (mediaMap[entry.filename]) {
-      console.log(`  ${progress} ${entry.filename} — already in map (ID: ${mediaMap[entry.filename].strapi5MediaId}), skipping`);
-      skippedCount++;
+    // Idempotency: skip if already in map
+    if (map[f.hash] && !FORCE) {
+      skipped++;
+      continue;
+    }
+
+    const filePath = path.join(filesDir, `${f.hash}${f.ext}`);
+    if (!existsSync(filePath)) {
+      failed++;
+      map[f.hash] = { error: 'file not on disk', sourceId: f.sourceId };
       continue;
     }
 
     try {
-      // Check if already exists in Strapi 5
-      const existing = await checkExistingMedia(entry.filename, apiUrl, token);
-
-      if (existing) {
-        mediaMap[entry.filename] = {
-          sourceArticleId: entry.articleId || null,
-          sourceAppId: entry.appId || null,
-          location: entry.location,
-          index: entry.index ?? null,
-          strapi5MediaId: existing.id,
-          strapi5Url: existing.url,
-        };
-        console.log(`  ${progress} ${entry.filename} — already exists (ID: ${existing.id}), skipping`);
-        skippedCount++;
-      } else {
-        // Upload the file
-        const filePath = path.join(filesDir, entry.filename);
-        const result = await uploadFile(filePath, entry.filename, entry.mimeType, apiUrl, token);
-
-        mediaMap[entry.filename] = {
-          sourceArticleId: entry.articleId || null,
-          sourceAppId: entry.appId || null,
-          location: entry.location,
-          index: entry.index ?? null,
-          strapi5MediaId: result.id,
-          strapi5Url: result.url,
-        };
-        console.log(`  ${progress} ${entry.filename} — ${GREEN}uploaded (ID: ${result.id})${RESET}`);
-        uploadedCount++;
-      }
-
-      // Save map incrementally (resume support)
-      await fs.writeFile(mediaMapPath, JSON.stringify(mediaMap, null, 2));
-
-      // Rate-limit delay
-      if (delayMs > 0) await delay(delayMs);
-
+      const result = await uploadFile(filePath, f);
+      map[f.hash] = {
+        sourceId: f.sourceId,
+        sourceHash: f.hash,
+        sourceUrl: f.sourceUrl,
+        strapi5Id: result.id,
+        strapi5Url: result.url,
+        strapi5Hash: result.hash,
+        name: result.name,
+        size: result.size,
+      };
+      uploaded++;
+      totalBytes += statSync(filePath).size;
+      if (delay > 0) await sleep(delay);
     } catch (err) {
-      console.log(`  ${progress} ${entry.filename} — ${RED}FAILED: ${err.message}${RESET}`);
-      failCount++;
+      failed++;
+      map[f.hash] = { error: err.message, sourceId: f.sourceId };
+    }
+
+    // Persist map periodically (every 25 uploads) so failures don't lose progress
+    if ((i + 1) % 25 === 0 || i === queue.length - 1) {
+      await fs.writeFile(mapPath, JSON.stringify(map, null, 2));
+      process.stdout.write(`\r  ${DIM}${i + 1}/${queue.length}${RESET}  ${GREEN}${uploaded} uploaded${RESET}, ${DIM}${skipped} skipped${RESET}, ${RED}${failed} failed${RESET}, ${formatBytes(totalBytes)}    `);
     }
   }
 
-  // Final save
-  await fs.writeFile(mediaMapPath, JSON.stringify(mediaMap, null, 2));
+  // Final flush
+  await fs.writeFile(mapPath, JSON.stringify(map, null, 2));
 
-  // Summary
-  console.log(`\n${GREEN}Upload complete: ${toProcess.length} files processed (${uploadedCount} uploaded, ${skippedCount} already existed, ${failCount} failed)${RESET}`);
-  console.log(`Media map saved to ${path.relative(ROOT, mediaMapPath)}`);
+  const elapsed = Date.now() - startTime;
 
-  if (failCount > 0) {
-    console.log(`${YELLOW}WARNING: ${failCount} uploads failed. Review errors above and re-run to retry.${RESET}`);
+  console.log(''); // newline
+  console.log('');
+  console.log(`${BOLD}── Summary ──${RESET}`);
+  console.log(`  Files queued:      ${queue.length}`);
+  console.log(`  Uploaded:          ${uploaded}`);
+  console.log(`  Skipped (cached):  ${skipped}`);
+  console.log(`  Failed:            ${failed}`);
+  console.log(`  Bytes uploaded:    ${formatBytes(totalBytes)}`);
+  console.log(`  Elapsed:           ${(elapsed / 1000).toFixed(1)}s`);
+  console.log(`  Map:               ${path.relative(ROOT, mapPath)}`);
+  console.log('');
+
+  if (failed > 0) {
+    const failedHashes = Object.entries(map)
+      .filter(([, v]) => v.error)
+      .slice(0, 5);
+    console.log(`${YELLOW}${failed} upload(s) failed. Sample errors:${RESET}`);
+    for (const [hash, v] of failedHashes) {
+      console.log(`  ${hash}: ${v.error}`);
+    }
+    console.log(`Re-run to retry just the failures: ${CYAN}node migration/scripts/03c-upload-media.js${RESET}`);
+    console.log('');
+    process.exit(1);
   }
+
+  console.log(`${GREEN}${BOLD}Phase 3c complete.${RESET}`);
+  console.log('');
+  console.log('Next: 03f-rewrite-content (substitute UploadFile IDs + rewrite richtext URLs)');
+  console.log(`  ${CYAN}node migration/scripts/03f-rewrite-content.js${RESET}`);
+  console.log('');
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(`\n${RED}FATAL: ${err.message}${RESET}`);
+  console.error(err.stack);
   process.exit(1);
 });

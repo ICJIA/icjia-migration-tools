@@ -154,3 +154,88 @@ export function checkForRemnants(text) {
 
   return remnants;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// URL rewriting (for ICJIA's richtext bodies that embed UploadFile URLs)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Regex matching both absolute and relative `/uploads/<hash><ext>` references
+ * within markdown or HTML. Uses a permissive character class that matches the
+ * Strapi 3 hash convention (alphanumeric + underscore, dashes occur in some).
+ *
+ * Capture groups:
+ *   [1] full URL (matched portion)
+ *   [2] origin (e.g., "https://agency.icjia-api.cloud") or empty for relative
+ *   [3] hash (the filename without extension)
+ *   [4] extension (".jpg", ".pdf", etc.)
+ *
+ * @type {RegExp}
+ */
+const UPLOADS_URL_RE = /(https?:\/\/[^\/\s)"']+)?(\/uploads\/([\w\-.]+?)(\.[a-zA-Z0-9]+))(?=[\s)"'?#&,.]|$)/g;
+
+/**
+ * Rewrite `/uploads/<sourceHash><ext>` URLs (absolute or relative) in markdown
+ * or HTML using a uploadfile-map keyed by source hash.
+ *
+ * If a match is found in the map, the URL is replaced with the Strapi 5 upload
+ * URL. If no match, the URL is preserved as-is and added to a `unmatched` list.
+ *
+ * Rewrites both:
+ *   - `https://agency.icjia-api.cloud/uploads/r3_a7cad5e152.jpg` → `<strapi5Url>`
+ *   - `/uploads/r3_a7cad5e152.jpg` → `<strapi5Url>`
+ *
+ * Idempotent — running twice does nothing the second time (the new URLs no
+ * longer match the source pattern).
+ *
+ * @param {string} text - Markdown or HTML body content
+ * @param {Object} uploadMap - Object keyed by source hash, values include `strapi5Url`
+ * @param {{strapi5BaseUrl?: string}} [opts] - Optional. If `strapi5BaseUrl` is set,
+ *   relative strapi5Url values (e.g., "/uploads/...") are prefixed.
+ * @returns {{rewritten: string, replacedCount: number, unmatched: Array<{originalUrl, hash}>}}
+ */
+export function rewriteUploadUrls(text, uploadMap, opts = {}) {
+  if (!text || typeof text !== 'string') {
+    return { rewritten: text, replacedCount: 0, unmatched: [] };
+  }
+  if (!uploadMap) {
+    return { rewritten: text, replacedCount: 0, unmatched: [] };
+  }
+
+  let replacedCount = 0;
+  const unmatched = [];
+
+  const rewritten = text.replace(UPLOADS_URL_RE, (match, _origin, _path, hash, ext) => {
+    const entry = uploadMap[hash];
+    if (!entry || !entry.strapi5Url) {
+      unmatched.push({ originalUrl: match, hash });
+      return match;
+    }
+    let newUrl = entry.strapi5Url;
+    if (opts.strapi5BaseUrl && newUrl.startsWith('/')) {
+      newUrl = opts.strapi5BaseUrl.replace(/\/$/, '') + newUrl;
+    }
+    replacedCount++;
+    return newUrl;
+  });
+
+  return { rewritten, replacedCount, unmatched };
+}
+
+/**
+ * Find all upload URL references in text (without rewriting).
+ * Useful for testing and pre-rewrite inspection.
+ *
+ * @param {string} text
+ * @returns {Array<{originalUrl, hash, ext}>}
+ */
+export function findUploadUrls(text) {
+  if (!text || typeof text !== 'string') return [];
+  const results = [];
+  const re = new RegExp(UPLOADS_URL_RE.source, UPLOADS_URL_RE.flags);
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    results.push({ originalUrl: m[0], hash: m[3], ext: m[4] });
+  }
+  return results;
+}
