@@ -56,6 +56,8 @@ const config = await loadConfig();
 const argv = process.argv.slice(2);
 const TYPE_FILTER = argv.find((a) => a.startsWith('--type='))?.slice('--type='.length);
 const FORCE = argv.includes('--force');
+const UPDATE_EXISTING = argv.includes('--update-existing');
+const UPDATE_NEWER = argv.includes('--update-newer');
 
 // Strapi 3 internal fields to strip — Strapi 5 manages these itself
 const STRAPI3_INTERNAL_FIELDS = new Set([
@@ -264,9 +266,23 @@ async function main() {
       const rec = records[i];
       const sourceId = String(rec.id);
 
-      if (map[sourceId]?.documentId && !FORCE) {
+      // Skip-already-loaded by default. --update-existing PUTs every
+      // matching record. --update-newer PUTs only if source updated_at
+      // is newer than the last sync.
+      const existingDocId = map[sourceId]?.documentId;
+      if (existingDocId && !FORCE && !UPDATE_EXISTING && !UPDATE_NEWER) {
         stats.skipped++;
         continue;
+      }
+      if (existingDocId && UPDATE_NEWER) {
+        const lastSyncMs = map[sourceId]?.lastSyncedAt
+          ? new Date(map[sourceId].lastSyncedAt).getTime()
+          : 0;
+        const sourceUpdMs = rec.updated_at ? new Date(rec.updated_at).getTime() : 0;
+        if (sourceUpdMs <= lastSyncMs) {
+          stats.skipped++;
+          continue;
+        }
       }
 
       const body = buildRecordBody(rec, ct.name, classified, {
@@ -300,13 +316,27 @@ async function main() {
             }
           }
 
-          result = await client.post(`/api/${restPluralName(ct)}`, body);
-          map[sourceId] = {
-            sourceId,
-            legacyId: body.legacyId,
-            documentId: result.data?.documentId,
-            id: result.data?.id,
-          };
+          if (existingDocId && (UPDATE_EXISTING || UPDATE_NEWER)) {
+            // PUT to update an existing record
+            result = await client.put(`/api/${restPluralName(ct)}/${existingDocId}`, body);
+            map[sourceId] = {
+              ...map[sourceId],
+              legacyId: body.legacyId,
+              documentId: result.data?.documentId || existingDocId,
+              id: result.data?.id || map[sourceId].id,
+              lastSyncedAt: new Date().toISOString(),
+              updated: true,
+            };
+          } else {
+            result = await client.post(`/api/${restPluralName(ct)}`, body);
+            map[sourceId] = {
+              sourceId,
+              legacyId: body.legacyId,
+              documentId: result.data?.documentId,
+              id: result.data?.id,
+              lastSyncedAt: new Date().toISOString(),
+            };
+          }
         }
         stats.created++;
         if (delay > 0) await sleep(delay);

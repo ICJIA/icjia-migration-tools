@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-02
+
+### Added — incremental updates
+
+- **`update.sh`** — incremental sync from Strapi 3 to a Strapi 5 destination
+  (local or prod). Re-runs the migration phases idempotently to pick up new
+  or modified records without redoing the full migration.
+  - `--target=local` activates `config.dev.js`; `--target=prod` activates
+    `config.prod.js`. Fails fast if the destination Strapi 5 install isn't
+    found or isn't reachable, with specific guidance per failure mode.
+  - `--skip-media` skips Phase 3 (faster when no new uploads).
+  - `--skip-timestamps` skips the Strapi-5-stop-required SQLite UPDATE.
+  - Forwards `--update-newer` and `--update-existing` to the load phase.
+  - Backs up the user's current `config.js` to `config.js.backup` before
+    swapping in the target profile.
+- **`04-load.js --update-existing`** — PUT every record by legacyId
+  (one-off bulk update; heavy).
+- **`04-load.js --update-newer`** — PUT records whose source `updated_at`
+  is newer than the last sync. Tracks `lastSyncedAt` per-record in the
+  per-type ID map. Recommended for cutover-window incremental updates.
+
+### Path handling clarification
+
+- README: explicit section on running `install-strapi5.sh` and `update.sh`
+  from any working directory (both use absolute path resolution from
+  `${BASH_SOURCE[0]}`). For prod, prefer absolute `--target=/var/www/...`
+  over the default sibling-directory layout.
+
 ## [0.7.9] - 2026-05-02
 
 ### Added

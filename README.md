@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.7.9 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.8.0 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -276,6 +276,66 @@ Edit this file to scope the migration (add types, skip types, change dominance).
 ## Strapi 5 setup
 
 The migration tool expects a fresh Strapi 5 install at the path given by `STRAPI5_PROJECT_PATH` (default `../icjia-public-strapi5`). **Install in JavaScript mode**, not TypeScript — the migration tool's generated boilerplate is JS, and a JS Strapi 5 project loads them natively without compilation.
+
+### Incremental updates after the first migration
+
+Once the initial migration is done, you may want to pick up new or modified records from Strapi 3 (during the cutover window, before the public site switches over). Use `update.sh`:
+
+```bash
+# Pick up NEW records only (default — fast, safe)
+./update.sh --target=local
+./update.sh --target=prod
+
+# Also UPDATE records whose source updated_at is newer than last sync
+./update.sh --target=local --update-newer
+
+# Force-update every existing record (heaviest; re-applies all fields)
+./update.sh --target=local --update-existing
+
+# Skip parts:
+./update.sh --target=local --skip-media        # no new media; skip Phase 3
+./update.sh --target=local --skip-timestamps   # don't restart Strapi 5 for SQLite UPDATE
+```
+
+What happens:
+1. Activates `config.<target>.js` (backs up any existing `config.js` to `config.js.backup`)
+2. Verifies Strapi 5 is reachable + the API token is valid; **fails fast if either is missing**
+3. Re-runs Phase 2 extract (idempotent — caches are checked vs SQLite ground-truth)
+4. Re-runs Phase 3 media (idempotent — disk + hash dedup skip already-processed files)
+5. Re-runs Phase 4 load — INSERTs new records, optionally PUTs changed records based on flags
+6. Re-runs Phase 4 link-relations (Strapi 5's `connect` is idempotent; no duplicates)
+7. Optionally restores timestamps (Phase 4c — interactive prompt)
+8. Re-runs validation, audit, and report
+
+**Recommended cutover workflow:**
+- Migration day −7 to −1: `./update.sh --target=prod --update-newer` daily to capture editorial changes
+- Migration day 0 (cutover): one final `./update.sh --target=prod --update-newer`, then flip the frontend
+- After cutover: stop running this — Strapi 5 is the new source of truth
+
+**What `update.sh` does NOT do** (intentional):
+- Delete records from Strapi 5 that were removed from Strapi 3 (no auto-prune)
+- Resolve conflicts when both Strapi 3 and Strapi 5 edited the same record (last write wins, source side)
+
+### Path handling
+
+Both `install-strapi5.sh` and `update.sh` use absolute path resolution from `${BASH_SOURCE[0]}`, so they work from any working directory:
+
+```bash
+# From your home directory:
+~/icjia-migration-tools/install-strapi5.sh
+
+# Via absolute path:
+/var/www/icjia-migration-tools/update.sh --target=prod
+
+# Or `cd` into the repo and run them locally:
+cd /Volumes/satechi/webdev/icjia-migration-tools && ./update.sh --target=local
+```
+
+For prod, point `install-strapi5.sh` at the absolute install location:
+
+```bash
+./install-strapi5.sh --target=/var/www/icjia-public-strapi5 --port=5150
+```
 
 ### One-time install (automated)
 
