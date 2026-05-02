@@ -17,7 +17,8 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { RestClient } from '../lib/rest-client.js';
+import Database from 'better-sqlite3';
+
 import { openSourceDb, countTable } from '../lib/sqlite-reader.js';
 import { loadConfig } from '../lib/load-config.js';
 
@@ -38,25 +39,25 @@ async function loadJson(p) {
   return JSON.parse(await fs.readFile(p, 'utf8'));
 }
 
-function restPluralName(manifestEntry) {
-  if (manifestEntry.kind === 'singleType') return manifestEntry.name;
-  return (manifestEntry.queryName || manifestEntry.name)
-    .replace(/_/g, '-')
-    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-    .toLowerCase();
+/**
+ * Strapi 5 stores 2 rows per document for draftAndPublish types (one draft +
+ * one published version). REST API's pagination.total counts ROWS, not
+ * documents. Counting distinct document_id from the destination SQLite gives
+ * the actual document count, which matches the source record count.
+ */
+function fetchS5DocumentCount(s5Db, manifestEntry) {
+  const table = manifestEntry.sqlTable;
+  const row = s5Db
+    .prepare(`SELECT COUNT(DISTINCT document_id) AS n FROM ${quoteIdent(table)}`)
+    .get();
+  return row.n;
 }
 
-async function fetchS5Count(client, manifestEntry) {
-  const params = {
-    'pagination[pageSize]': 1,
-    'fields[0]': 'documentId',
-    publicationState: 'preview', // include drafts
-  };
-  const result = await client.get(`/api/${restPluralName(manifestEntry)}`, params);
-  if (manifestEntry.kind === 'singleType') {
-    return result.data ? 1 : 0;
+function quoteIdent(name) {
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    throw new Error(`Refusing unsafe identifier: ${name}`);
   }
-  return result.meta?.pagination?.total ?? 0;
+  return `"${name}"`;
 }
 
 async function main() {
@@ -68,23 +69,26 @@ async function main() {
   const dbPath = path.resolve(ROOT, config.strapi3.sqliteDbPath);
   const db = openSourceDb(dbPath);
 
-  const client = new RestClient(config.strapi5.apiUrl, {
-    token: config.strapi5.token,
-    timeoutMs: config.settings?.requestTimeoutMs || 30000,
-  });
+  const s5DbPath = path.resolve(ROOT, config.strapi5.dbPath);
+  if (!existsSync(s5DbPath)) {
+    console.error(`${RED}ERROR${RESET} Strapi 5 SQLite DB not found at ${s5DbPath}`);
+    db.close();
+    process.exit(1);
+  }
+  const s5Db = new Database(s5DbPath, { readonly: true });
 
   const mapsDir = path.resolve(ROOT, config.paths.maps);
 
   const results = { types: 0, countsMatch: 0, countsMismatch: 0, mapErrors: 0, errors: [] };
 
-  console.log(`${BOLD}Per-type record counts (S5 vs SQLite source):${RESET}`);
+  console.log(`${BOLD}Per-type document counts (S5 vs SQLite source):${RESET}`);
 
   for (const ct of activeTypes) {
     const expected = ct.kind === 'singleType' ? 1 : countTable(db, ct.sqlTable);
 
     let actual;
     try {
-      actual = await fetchS5Count(client, ct);
+      actual = fetchS5DocumentCount(s5Db, ct);
     } catch (err) {
       results.errors.push({ type: ct.name, error: err.message });
       console.log(`  ${RED}✗${RESET} ${ct.name.padEnd(16)} ${RED}${err.message.slice(0, 80)}${RESET}`);
@@ -116,6 +120,7 @@ async function main() {
   }
 
   db.close();
+  s5Db.close();
 
   console.log('');
   console.log(`${BOLD}── Summary ──${RESET}`);
