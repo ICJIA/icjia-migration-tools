@@ -6,7 +6,9 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.1.0 (Phase 0 bootstrap)
+**Version:** 0.7.0 — see [CHANGELOG.md](CHANGELOG.md)
+
+**Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
 ---
 
@@ -267,21 +269,76 @@ Edit this file to scope the migration (add types, skip types, change dominance).
 
 ## Strapi 5 setup
 
-Out of scope for this repo. The migration tool expects a fresh Strapi 5 install at the path given by `STRAPI5_PROJECT_PATH` (default `../icjia-public-strapi5`). To create one:
+The migration tool expects a fresh Strapi 5 install at the path given by `STRAPI5_PROJECT_PATH` (default `../icjia-public-strapi5`). **Install in JavaScript mode**, not TypeScript — the migration tool's generated boilerplate is JS, and a JS Strapi 5 project loads them natively without compilation.
+
+### One-time install (full procedure)
 
 ```bash
-cd ..
-npx create-strapi-app@latest icjia-public-strapi5 --quickstart --no-run
+# 1. Create the JS Strapi 5 project (sibling directory)
+cd /Volumes/satechi/webdev    # parent of this repo
+npx create-strapi-app@latest icjia-public-strapi5 \
+  --quickstart --no-run --skip-cloud --skip-db \
+  --javascript
+
+# When the installer asks:
+# - Database client → SQLite (default)
+# - Skip admin user creation prompt — we'll create it via the UI
+
+# 2. Configure port (avoid clashing with anything else)
 cd icjia-public-strapi5
-echo "PORT=1338" >> .env       # avoid clash with the sibling tool on :1337
+echo "PORT=1337" >> .env       # or 1338 if 1337 is taken
+
+# 3. Install the GraphQL plugin
+#    The migration tool uses GraphQL for schema verification (Phase 1c) and
+#    for cross-checking the source. Without this plugin, those steps fail.
+pnpm add @strapi/plugin-graphql
+
+# 4. Approve the native build scripts pnpm blocks by default
+pnpm approve-builds
+# Select all (especially better-sqlite3 and sharp) and confirm
+# OR run directly:
+pnpm rebuild better-sqlite3 sharp
+
+# 5. First launch
 pnpm develop
 ```
 
-Then in the admin UI:
-1. Create the first admin user.
-2. Settings → API Tokens → Create Token (Full Access). Copy the token to `STRAPI5_TOKEN`.
+Then in the browser (auto-opens, or visit `http://localhost:1337/admin`):
 
-Phase 1 of this tool will write content-type and component schemas into `<STRAPI5_PROJECT_PATH>/src/api/` and `<STRAPI5_PROJECT_PATH>/src/components/`. Restart Strapi 5 after Phase 1 completes so it picks up the new schemas.
+1. **Create the admin user** via the first-launch wizard.
+2. Settings (gear icon) → **Global Settings → API Tokens** → **+ Create new API Token**:
+   - Name: `migration`
+   - Description: `Migration tool — Phase 4 write access`
+   - Token duration: `Unlimited`
+   - **Token type: `Full access`** ← critical; "Read-only" tokens cannot create records
+3. **Copy the token immediately** — Strapi only displays it once at creation time.
+4. Set the token in this repo's `config.js` (preferred) or as an env var:
+   ```bash
+   # Option A: edit config.js — strapi5.token = '...'  (config.js is gitignored)
+   # Option B: export STRAPI5_TOKEN="<paste-here>"  (per-shell only)
+   ```
+
+Phase 1 of this migration tool will write content-type and component schemas into `<STRAPI5_PROJECT_PATH>/src/api/` and `<STRAPI5_PROJECT_PATH>/src/components/`. Strapi 5 in dev mode auto-detects the file changes and reloads — no manual restart required after Phase 1.
+
+### Adding the GraphQL plugin to an existing install
+
+If you already have a Strapi 5 install without `@strapi/plugin-graphql`:
+
+```bash
+cd /Volumes/satechi/webdev/icjia-public-strapi5
+pnpm add @strapi/plugin-graphql
+# Stop Strapi 5 (Ctrl+C in its terminal) then:
+pnpm develop
+```
+
+The plugin is auto-discovered — no config changes needed.
+
+### Choosing JavaScript vs TypeScript
+
+This migration tool generates **JavaScript** boilerplate (CommonJS) for the Strapi 5 project. Two implications:
+
+- **Recommended:** create the Strapi 5 project with `--javascript`. The `.js` files we generate load natively, no compile step, fastest iteration.
+- **If you must use TypeScript:** the migration tool detects `tsconfig.json` and writes `.ts` boilerplate to match. But the schema generator must round-trip through `tsc` for routes to register — slightly slower; not recommended for first-time runs.
 
 ---
 
