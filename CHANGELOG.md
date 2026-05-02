@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.7] - 2026-05-02
+
+### Fixed
+
+- `install-strapi5.sh` now actually builds the native bindings.
+  In pnpm 10+, even `pnpm rebuild <pkg>` is a no-op unless the package
+  is listed in `pnpm.onlyBuiltDependencies` in package.json. The
+  v0.7.6 script ran `pnpm rebuild better-sqlite3 sharp` but the
+  allowlist was empty, so nothing happened — Strapi 5 still failed at
+  startup with "Could not locate the bindings file".
+- New flow: write the allowlist to the project's `package.json`, then
+  run `pnpm install` to actually trigger the build scripts. The script
+  also verifies the resulting `better_sqlite3.node` exists on disk and
+  falls back to a direct `node-gyp rebuild` if not.
+
 ## [0.7.6] - 2026-05-02
 
 ### Added

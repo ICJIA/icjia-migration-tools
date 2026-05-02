@@ -169,16 +169,67 @@ pnpm add @strapi/plugin-graphql
 ok "@strapi/plugin-graphql installed"
 
 # ─────────────────────────────────────────────────────────────────────
-# Rebuild native bindings (CRITICAL — pnpm 10+ blocks build scripts)
+# Build native bindings (CRITICAL — pnpm 10+ blocks build scripts)
 # ─────────────────────────────────────────────────────────────────────
 
-step "Building native bindings (better-sqlite3, sharp)"
+step "Approving native build scripts in package.json"
 
-# pnpm 10+ blocks build scripts by default for security. Strapi needs the
-# native .node binaries built or it fails with "Could not locate the
-# bindings file" at startup. This is the most common first-time error.
-pnpm rebuild better-sqlite3 sharp
-ok "Native bindings built"
+# pnpm 10+ blocks all install/postinstall scripts unless the package is
+# listed in `pnpm.onlyBuiltDependencies`. Even `pnpm rebuild` is a no-op
+# without this allowlist — that's why the previous "rebuild only" approach
+# silently produced no .node binaries and Strapi crashed at startup with
+# "Could not locate the bindings file".
+node -e "
+const fs = require('fs');
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+pkg.pnpm = pkg.pnpm || {};
+pkg.pnpm.onlyBuiltDependencies = [
+  'better-sqlite3',
+  'sharp',
+  'esbuild',
+  '@swc/core',
+  'core-js-pure',
+  '@apollo/protobufjs',
+  'prebuild-install',
+];
+fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+console.log('Added pnpm.onlyBuiltDependencies allowlist');
+"
+ok "package.json updated with build-script allowlist"
+
+step "Reinstalling with build scripts enabled"
+
+# Force a fresh install so the now-approved scripts actually run.
+pnpm install --reporter default
+ok "pnpm install completed with build scripts"
+
+# ─────────────────────────────────────────────────────────────────────
+# Verify the binding actually exists; fall back to node-gyp if not
+# ─────────────────────────────────────────────────────────────────────
+
+step "Verifying better-sqlite3 native binding"
+
+# Find the actual path (pnpm's content-addressable hashing makes this hairy)
+BINDING=$(find node_modules/.pnpm/better-sqlite3* -name "better_sqlite3.node" 2>/dev/null | head -1)
+
+if [ -n "$BINDING" ] && [ -f "$BINDING" ]; then
+  ok "binding present at $BINDING"
+else
+  warn "binding not found — falling back to direct node-gyp build"
+  BSQ_DIR=$(find node_modules/.pnpm -type d -name "better-sqlite3" -path "*/better-sqlite3@*/node_modules/better-sqlite3" 2>/dev/null | head -1)
+  if [ -z "$BSQ_DIR" ]; then
+    fail "could not locate better-sqlite3 install directory under node_modules/.pnpm — install is broken"
+  fi
+  echo "  Building in: $BSQ_DIR"
+  (cd "$BSQ_DIR" && npx --yes node-gyp rebuild) || fail "node-gyp rebuild failed"
+  BINDING=$(find node_modules/.pnpm/better-sqlite3* -name "better_sqlite3.node" 2>/dev/null | head -1)
+  if [ -z "$BINDING" ] || [ ! -f "$BINDING" ]; then
+    fail "binding STILL not found after node-gyp. Manual debug:
+      cd $BSQ_DIR
+      npx node-gyp rebuild --verbose"
+  fi
+  ok "binding built at $BINDING"
+fi
 
 # ─────────────────────────────────────────────────────────────────────
 # Done — print next steps
