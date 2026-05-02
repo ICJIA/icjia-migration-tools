@@ -1,0 +1,28 @@
+{
+  "collectionName": "components_banner_banners",
+  "info": {
+    "name": "banner",
+    "icon": "bookmark",
+    "description": ""
+  },
+  "options": {},
+  "attributes": {
+    "bannerText": {
+      "type": "text",
+      "required": true
+    },
+    "bannerColor": {
+      "type": "string",
+      "default": "blue darken-4",
+      "required": true
+    },
+    "whiteText": {
+      "type": "boolean",
+      "default": true
+    },
+    "dismissable": {
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

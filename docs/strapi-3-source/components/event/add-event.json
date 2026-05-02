@@ -1,0 +1,23 @@
+{
+  "collectionName": "components_event_add_events",
+  "info": {
+    "name": "addEvent",
+    "icon": "globe",
+    "description": ""
+  },
+  "options": {},
+  "attributes": {
+    "start": {
+      "type": "datetime"
+    },
+    "end": {
+      "type": "datetime"
+    },
+    "timed": {
+      "type": "boolean"
+    },
+    "tags": {
+      "collection": "tag"
+    }
+  }
+}

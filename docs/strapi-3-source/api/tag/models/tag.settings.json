@@ -1,0 +1,64 @@
+{
+  "kind": "collectionType",
+  "collectionName": "tags",
+  "info": {
+    "name": "tag",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "summary": {
+      "type": "text"
+    },
+    "events": {
+      "via": "tags",
+      "collection": "event"
+    },
+    "posts": {
+      "via": "tags",
+      "collection": "post"
+    },
+    "pages": {
+      "via": "tags",
+      "collection": "page"
+    },
+    "programs": {
+      "via": "tags",
+      "collection": "program"
+    },
+    "grants": {
+      "via": "tags",
+      "collection": "grant"
+    },
+    "meetings": {
+      "via": "tags",
+      "collection": "meeting"
+    },
+    "biographies": {
+      "via": "tags",
+      "collection": "biography"
+    },
+    "jobs": {
+      "via": "tags",
+      "collection": "job"
+    },
+    "units": {
+      "via": "tags",
+      "collection": "unit"
+    }
+  }
+}

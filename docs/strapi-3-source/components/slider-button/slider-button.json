@@ -1,0 +1,19 @@
+{
+  "collectionName": "components_slider_button_slider_buttons",
+  "info": {
+    "name": "sliderButton",
+    "icon": "asterisk",
+    "description": ""
+  },
+  "options": {},
+  "attributes": {
+    "label": {
+      "type": "string"
+    },
+    "menuItem": {
+      "type": "component",
+      "repeatable": true,
+      "component": "menu-item.menu-item"
+    }
+  }
+}

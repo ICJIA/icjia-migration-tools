@@ -1,0 +1,19 @@
+{
+  "collectionName": "components_carousel_carousels",
+  "info": {
+    "name": "carousel",
+    "icon": "address-card",
+    "description": ""
+  },
+  "options": {},
+  "attributes": {
+    "title": {
+      "type": "string"
+    },
+    "slide": {
+      "type": "component",
+      "repeatable": true,
+      "component": "slide.slide"
+    }
+  }
+}

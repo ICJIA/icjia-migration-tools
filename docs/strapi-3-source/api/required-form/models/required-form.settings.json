@@ -1,0 +1,57 @@
+{
+  "kind": "collectionType",
+  "collectionName": "required_forms",
+  "info": {
+    "name": "RequiredForm",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true,
+      "unique": false
+    },
+    "slug": {
+      "type": "uid",
+      "required": true,
+      "targetField": "title"
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "requiredForm"
+      ],
+      "default": "requiredForm",
+      "required": true,
+      "unique": false
+    },
+    "summary": {
+      "type": "text",
+      "required": true
+    },
+    "seearchMeta": {
+      "type": "text"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "tags": {
+      "collection": "tag"
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "files"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    }
+  }
+}

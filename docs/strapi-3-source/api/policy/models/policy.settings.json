@@ -1,0 +1,58 @@
+{
+  "kind": "collectionType",
+  "collectionName": "policies",
+  "info": {
+    "name": "Policy",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "rule",
+        "regulation",
+        "policy",
+        "requiredForms"
+      ],
+      "default": "policy",
+      "required": true
+    },
+    "summary": {
+      "type": "text",
+      "required": true
+    },
+    "searchMeta": {
+      "type": "text"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "tags": {
+      "collection": "tag"
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "files"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    }
+  }
+}

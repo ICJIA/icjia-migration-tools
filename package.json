@@ -1,0 +1,48 @@
+{
+  "name": "icjia-public-cms-migration-2026",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "API-to-API migration tool for the ICJIA public website: Strapi 3 (SQLite) → Strapi 5 (SQLite). Forked from icjia-hub-migration-tools.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ICJIA/icjia-migration-tools.git"
+  },
+  "license": "MIT",
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "migrate:full": "node migration/scripts/migrate-full.js",
+    "migrate:reset": "node migration/scripts/reset-remote.js",
+    "migrate:clean": "node migration/scripts/00-clean.js",
+    "migrate:phase01": "node migration/scripts/01-run-phase.js",
+    "migrate:phase02": "node migration/scripts/02-run-phase.js",
+    "migrate:phase03": "node migration/scripts/03-run-phase.js",
+    "migrate:phase04": "node migration/scripts/04-run-phase.js",
+    "migrate:phase05": "node migration/scripts/05-run-phase.js",
+    "migrate:phase06": "node migration/scripts/06-run-phase.js",
+    "audit": "node migration/scripts/06-audit.js",
+    "extract": "node migration/scripts/02-extract.js",
+    "introspect": "node migration/scripts/01a-introspect.js",
+    "generate": "node migration/scripts/01b-generate-schemas.js",
+    "verify": "node migration/scripts/01c-verify-schemas.js",
+    "validate": "node migration/scripts/05-validate.js",
+    "report": "node migration/scripts/07-generate-report.js",
+    "sync": "node migration/scripts/07-sync.js",
+    "fix-timestamps": "node migration/scripts/04c-fix-timestamps-remote.js",
+    "fix-image-refs": "node migration/scripts/04d-fix-image-refs.js",
+    "fix-tables": "node migration/scripts/fix-tables.js",
+    "set-strapi5": "node migration/scripts/set-strapi5-url.js",
+    "reset": "node migration/scripts/reset-strapi5.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "docx": "^9.6.1"
+  },
+  "devDependencies": {
+    "eslint": "^10.0.3",
+    "markdown-it": "^14.1.1"
+  }
+}

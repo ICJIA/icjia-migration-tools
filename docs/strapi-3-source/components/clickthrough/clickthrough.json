@@ -1,0 +1,27 @@
+{
+  "collectionName": "components_clickthrough_clickthroughs",
+  "info": {
+    "name": "clickThrough",
+    "icon": "tv",
+    "description": ""
+  },
+  "options": {},
+  "attributes": {
+    "title": {
+      "type": "string"
+    },
+    "teaser": {
+      "type": "string",
+      "maxLength": 300
+    },
+    "icon": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "datePosted": {
+      "type": "date"
+    }
+  }
+}

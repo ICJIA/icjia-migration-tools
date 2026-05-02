@@ -1,0 +1,97 @@
+{
+  "kind": "collectionType",
+  "collectionName": "pages",
+  "info": {
+    "name": "page",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "summary": {
+      "type": "text"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "splash": {
+      "model": "file",
+      "via": "related",
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "tags": {
+      "collection": "tag",
+      "via": "pages",
+      "dominant": true
+    },
+    "clickthrough": {
+      "type": "component",
+      "repeatable": true,
+      "component": "clickthrough.clickthrough"
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "about",
+        "fiscal",
+        "general",
+        "grants",
+        "informationSystems",
+        "innovationAndDigitalServices",
+        "irb",
+        "researchhub"
+      ],
+      "default": "about"
+    },
+    "showTOC": {
+      "type": "boolean",
+      "default": false
+    },
+    "searchMeta": {
+      "type": "text"
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "attachmentLabel": {
+      "type": "string"
+    },
+    "hideFromSearch": {
+      "type": "boolean",
+      "default": false
+    },
+    "hideTitle": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

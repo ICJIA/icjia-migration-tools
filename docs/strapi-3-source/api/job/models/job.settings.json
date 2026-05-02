@@ -1,0 +1,74 @@
+{
+  "kind": "collectionType",
+  "collectionName": "jobs",
+  "info": {
+    "name": "job",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string"
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title"
+    },
+    "summary": {
+      "type": "text"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "start": {
+      "type": "date"
+    },
+    "end": {
+      "type": "date"
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "contract",
+        "fullTime",
+        "internship",
+        "partTime",
+        "test"
+      ],
+      "default": "fullTime",
+      "required": true
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "files"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "external": {
+      "type": "component",
+      "repeatable": true,
+      "component": "external.external-url"
+    },
+    "searchMeta": {
+      "type": "text"
+    },
+    "tags": {
+      "collection": "tag",
+      "via": "jobs",
+      "dominant": true
+    },
+    "posts": {
+      "via": "jobs",
+      "collection": "post",
+      "dominant": true
+    }
+  }
+}

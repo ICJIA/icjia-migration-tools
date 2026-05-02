@@ -1,0 +1,84 @@
+{
+  "kind": "collectionType",
+  "collectionName": "grants",
+  "info": {
+    "name": "grant",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title"
+    },
+    "summary": {
+      "type": "text"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "start": {
+      "type": "date"
+    },
+    "end": {
+      "type": "date"
+    },
+    "legacy": {
+      "type": "boolean",
+      "default": false
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "files"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "tags": {
+      "collection": "tag",
+      "via": "grants",
+      "dominant": true
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "nofo",
+        "rfi"
+      ],
+      "default": "nofo"
+    },
+    "searchMeta": {
+      "type": "text"
+    },
+    "events": {
+      "via": "grants",
+      "collection": "event",
+      "dominant": true
+    },
+    "posts": {
+      "via": "grants",
+      "collection": "post",
+      "dominant": true
+    },
+    "programs": {
+      "via": "grants",
+      "collection": "program"
+    },
+    "biographies": {
+      "via": "grants",
+      "collection": "biography",
+      "dominant": true
+    }
+  }
+}

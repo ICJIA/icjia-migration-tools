@@ -1,0 +1,21 @@
+{
+  "kind": "collectionType",
+  "collectionName": "builds",
+  "info": {
+    "name": "build"
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "summary": {
+      "type": "text",
+      "required": true
+    },
+    "builder": {
+      "type": "string"
+    }
+  }
+}

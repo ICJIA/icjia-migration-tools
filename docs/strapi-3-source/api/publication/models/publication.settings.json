@@ -1,0 +1,85 @@
+{
+  "kind": "collectionType",
+  "collectionName": "publications",
+  "info": {
+    "name": "publication",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title"
+    },
+    "summary": {
+      "type": "text"
+    },
+    "fileURL": {
+      "type": "string"
+    },
+    "articleURL": {
+      "type": "string"
+    },
+    "publicationDate": {
+      "type": "date"
+    },
+    "pubType": {
+      "type": "enumeration",
+      "enum": [
+        "annualReport",
+        "application",
+        "article",
+        "barj",
+        "compiler",
+        "dataset",
+        "evaluation",
+        "general",
+        "getTheFacts",
+        "megProfiles",
+        "motorVehicleTheftPublications",
+        "onGoodAuthority",
+        "programEvaluationSummary",
+        "researchAtAGlance",
+        "researchBulletin",
+        "researchReport",
+        "toolkit",
+        "trendsAndIssuesUpdate"
+      ]
+    },
+    "verified": {
+      "type": "date"
+    },
+    "applicationURL": {
+      "type": "string"
+    },
+    "datasetURL": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "json"
+    },
+    "translations": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "searchMeta": {
+      "type": "text"
+    }
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "kind": "collectionType",
+  "collectionName": "posts",
+  "info": {
+    "name": "post",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "splash": {
+      "model": "file",
+      "via": "related",
+      "allowedTypes": [
+        "images"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "summary": {
+      "type": "text",
+      "required": true,
+      "minLength": 15
+    },
+    "tags": {
+      "via": "posts",
+      "collection": "tag",
+      "dominant": true
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "files",
+        "videos"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "events": {
+      "via": "posts",
+      "collection": "event"
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "news",
+        "outreach",
+        "pressRelease",
+        "mediaAdvisory"
+      ],
+      "default": "news",
+      "required": true
+    },
+    "showTOC": {
+      "type": "boolean",
+      "default": false
+    },
+    "meetings": {
+      "via": "posts",
+      "collection": "meeting",
+      "dominant": true
+    },
+    "grants": {
+      "via": "posts",
+      "collection": "grant"
+    },
+    "dateOverride": {
+      "type": "date"
+    },
+    "searchMeta": {
+      "type": "text"
+    },
+    "programs": {
+      "via": "posts",
+      "collection": "program",
+      "dominant": true
+    },
+    "hideSplash": {
+      "type": "boolean",
+      "default": false
+    },
+    "jobs": {
+      "via": "posts",
+      "collection": "job"
+    },
+    "attachmentLabel": {
+      "type": "string",
+      "default": "Attachments"
+    },
+    "biographies": {
+      "via": "posts",
+      "collection": "biography",
+      "dominant": true
+    },
+    "posts": {
+      "collection": "post",
+      "via": "post"
+    },
+    "post": {
+      "model": "post",
+      "via": "posts"
+    },
+    "isFeatured": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

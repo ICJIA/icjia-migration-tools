@@ -1,0 +1,52 @@
+{
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/biographies",
+      "handler": "biography.find",
+      "config": {
+        "policies": []
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/biographies/count",
+      "handler": "biography.count",
+      "config": {
+        "policies": []
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/biographies/:id",
+      "handler": "biography.findOne",
+      "config": {
+        "policies": []
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/biographies",
+      "handler": "biography.create",
+      "config": {
+        "policies": []
+      }
+    },
+    {
+      "method": "PUT",
+      "path": "/biographies/:id",
+      "handler": "biography.update",
+      "config": {
+        "policies": []
+      }
+    },
+    {
+      "method": "DELETE",
+      "path": "/biographies/:id",
+      "handler": "biography.delete",
+      "config": {
+        "policies": []
+      }
+    }
+  ]
+}

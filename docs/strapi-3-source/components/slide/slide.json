@@ -1,0 +1,44 @@
+{
+  "collectionName": "components_slide_slides",
+  "info": {
+    "name": "slide",
+    "icon": "archive",
+    "description": ""
+  },
+  "options": {},
+  "attributes": {
+    "title": {
+      "type": "string"
+    },
+    "teaser": {
+      "type": "string"
+    },
+    "image": {
+      "model": "file",
+      "via": "related",
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "grayscale": {
+      "type": "boolean",
+      "default": false
+    },
+    "opacity": {
+      "type": "decimal",
+      "max": 1,
+      "min": 0,
+      "default": 0.3
+    },
+    "tint": {
+      "type": "string",
+      "default": "blue lighten-3",
+      "required": true
+    }
+  }
+}

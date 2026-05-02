@@ -1,0 +1,48 @@
+{
+  "_comment": "Field type mapping rules for ICJIA public website Strapi 3 → 5. Direct mappings are passthrough; overrides handle source-shape mismatches; uploadPluginAllowedTypes is reference-only since allowedTypes are present in every .settings.json upload field.",
+  "directMappings": {
+    "string": "string",
+    "text": "text",
+    "richtext": "richtext",
+    "integer": "integer",
+    "biginteger": "biginteger",
+    "float": "float",
+    "decimal": "decimal",
+    "boolean": "boolean",
+    "date": "date",
+    "datetime": "datetime",
+    "time": "time",
+    "json": "json",
+    "uid": "uid",
+    "enumeration": "enumeration",
+    "email": "email",
+    "password": "password",
+    "media": "media"
+  },
+  "overrides": {
+    "_comment": "Empty for ICJIA — no Base64-string-as-image fields like the sibling tool's article.splash/thumbnail or app.image. Add entries here only if a source field type needs to change shape on the destination side."
+  },
+  "uploadPluginAllowedTypes": {
+    "_comment": "Reference of allowedTypes per content-type.field. Schema generator should read directly from .settings.json; this block exists for traceability and fallback.",
+    "biography.headshot": ["images", "files", "videos"],
+    "event.splash": ["images", "files", "videos"],
+    "event.attachments": ["files", "videos"],
+    "grant.attachments": ["files"],
+    "job.attachments": ["files"],
+    "meeting.attachments": ["files"],
+    "page.splash": ["images", "files", "videos"],
+    "page.attachments": ["images", "files", "videos"],
+    "policy.attachments": ["files"],
+    "post.splash": ["images"],
+    "post.attachments": ["files", "videos"],
+    "program.attachments": ["files"],
+    "publication.translations": ["images", "files", "videos"],
+    "required-form.attachments": ["files"],
+    "slide.image": ["images", "files", "videos"]
+  },
+  "incompleteRelations": {
+    "_comment": "Source-side relations missing `via` and/or `dominant` flags. Phase 1 schema generator injects these defaults so Strapi 5 schemas are valid.",
+    "policy.tags": { "via": "policies", "dominant": true, "collection": "tag" },
+    "required-form.tags": { "via": "requiredForms", "dominant": true, "collection": "tag" }
+  }
+}

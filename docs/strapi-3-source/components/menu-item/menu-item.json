@@ -1,0 +1,16 @@
+{
+  "collectionName": "components_menu_item_menu_items",
+  "info": {
+    "name": "menuItem",
+    "icon": "align-center"
+  },
+  "options": {},
+  "attributes": {
+    "label": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    }
+  }
+}

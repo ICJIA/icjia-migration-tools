@@ -1,0 +1,87 @@
+{
+  "kind": "collectionType",
+  "collectionName": "meetings",
+  "info": {
+    "name": "meeting",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title"
+    },
+    "start": {
+      "type": "datetime"
+    },
+    "end": {
+      "type": "datetime"
+    },
+    "body": {
+      "type": "richtext"
+    },
+    "attachments": {
+      "collection": "file",
+      "via": "related",
+      "allowedTypes": [
+        "files"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "events": {
+      "via": "meetings",
+      "collection": "event"
+    },
+    "summary": {
+      "type": "text",
+      "required": true,
+      "minLength": 15
+    },
+    "tags": {
+      "collection": "tag",
+      "via": "meetings",
+      "dominant": true
+    },
+    "addToEventCalendar": {
+      "type": "boolean",
+      "default": true
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "board",
+        "budget",
+        "irb",
+        "special"
+      ]
+    },
+    "posts": {
+      "via": "meetings",
+      "collection": "post"
+    },
+    "external": {
+      "type": "component",
+      "repeatable": true,
+      "component": "external.external-url"
+    },
+    "isCancelled": {
+      "type": "boolean",
+      "default": false,
+      "required": false
+    },
+    "cancellationMessage": {
+      "type": "text"
+    }
+  }
+}

@@ -1,0 +1,287 @@
+{
+  "version": "1.0",
+  "description": "Central manifest for the ICJIA public website Strapi 3 → 5 migration. Drives Phase 1 (schema gen), Phase 2 (extract), Phase 4 (load), Phase 5 (validate), Phase 6 (audit), Phase 7 (report). Hand-curated from docs/strapi-3-source/api/*/models/*.settings.json with relation dominance verified against SQLite join-table column order.",
+  "generatedAt": "2026-05-02",
+  "contentTypes": [
+    {
+      "name": "publication",
+      "kind": "collectionType",
+      "queryName": "publications",
+      "sqlTable": "publications",
+      "draftAndPublish": true,
+      "hasDrafts": true,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "Largest collection (1139 incl. 32 drafts). `tags` is JSON array (102 records); preserve as JSON literal. `translations` is [UploadFile]."
+    },
+    {
+      "name": "meeting",
+      "kind": "collectionType",
+      "queryName": "meetings",
+      "sqlTable": "meetings",
+      "draftAndPublish": true,
+      "hasDrafts": true,
+      "skipDefault": false,
+      "hasComponents": true,
+      "dominantRelations": ["tags"],
+      "componentFields": [
+        { "field": "external", "component": "external.external-url", "repeatable": true }
+      ],
+      "notes": "283 records incl. 2 drafts. `start`/`end` are DateTime."
+    },
+    {
+      "name": "job",
+      "kind": "collectionType",
+      "queryName": "jobs",
+      "sqlTable": "jobs",
+      "draftAndPublish": true,
+      "hasDrafts": true,
+      "skipDefault": false,
+      "hasComponents": true,
+      "dominantRelations": ["tags", "posts"],
+      "componentFields": [
+        { "field": "external", "component": "external.external-url", "repeatable": true }
+      ],
+      "notes": "231 records incl. 13 drafts."
+    },
+    {
+      "name": "form",
+      "kind": "collectionType",
+      "queryName": "forms",
+      "sqlTable": "forms",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "205 records. 403'd via unauthenticated GraphQL — extract via SQLite. `form` field is opaque JSON; preserve verbatim."
+    },
+    {
+      "name": "post",
+      "kind": "collectionType",
+      "queryName": "posts",
+      "sqlTable": "posts",
+      "draftAndPublish": true,
+      "hasDrafts": true,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags", "meetings", "programs", "biographies"],
+      "componentFields": [],
+      "notes": "190 records incl. 5 drafts. `splash` UploadFile (single, images only). `attachments` [UploadFile] (files, videos). Drop self-ref post.posts/post.post (0 records use it)."
+    },
+    {
+      "name": "biography",
+      "kind": "collectionType",
+      "queryName": "biographies",
+      "sqlTable": "biographies",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags"],
+      "componentFields": [],
+      "notes": "138 records. `headshot` UploadFile (single). m2o → unit (direct FK)."
+    },
+    {
+      "name": "grant",
+      "kind": "collectionType",
+      "queryName": "grants",
+      "sqlTable": "grants",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags", "events", "posts", "biographies"],
+      "componentFields": [],
+      "notes": "115 records. `attachments` [UploadFile] (files only)."
+    },
+    {
+      "name": "program",
+      "kind": "collectionType",
+      "queryName": "programs",
+      "sqlTable": "programs",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags", "grants"],
+      "componentFields": [],
+      "notes": "65 records."
+    },
+    {
+      "name": "page",
+      "kind": "collectionType",
+      "queryName": "pages",
+      "sqlTable": "pages",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": true,
+      "dominantRelations": ["tags"],
+      "componentFields": [
+        { "field": "clickthrough", "component": "clickthrough.clickthrough", "repeatable": true }
+      ],
+      "notes": "38 records. `splash` UploadFile, `attachments` [UploadFile]."
+    },
+    {
+      "name": "tag",
+      "kind": "collectionType",
+      "queryName": "tags",
+      "sqlTable": "tags",
+      "draftAndPublish": false,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "27 records. Hub of 9 m2m relations — but Tag is the INVERSE side on all of them; the other types own the joins (e.g., Post.tags is dominant)."
+    },
+    {
+      "name": "required-form",
+      "singularName": "required-form",
+      "kind": "collectionType",
+      "queryName": "requiredForms",
+      "sqlTable": "required-forms",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags"],
+      "componentFields": [],
+      "notes": "21 records. Source `tags` relation is incomplete (no via/dominant); migration injects `via: 'requiredForms'` + `dominant: true`. Preserve `seearchMeta` typo."
+    },
+    {
+      "name": "unit",
+      "kind": "collectionType",
+      "queryName": "units",
+      "sqlTable": "units",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags"],
+      "componentFields": [],
+      "notes": "11 records."
+    },
+    {
+      "name": "policy",
+      "kind": "collectionType",
+      "queryName": "policies",
+      "sqlTable": "policies",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags"],
+      "componentFields": [],
+      "notes": "9 records. Source `tags` relation is incomplete (no via/dominant); migration injects `via: 'policies'` + `dominant: true`."
+    },
+    {
+      "name": "rule",
+      "kind": "collectionType",
+      "queryName": "rules",
+      "sqlTable": "rules",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "7 records."
+    },
+    {
+      "name": "event",
+      "kind": "collectionType",
+      "queryName": "events",
+      "sqlTable": "events",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": ["tags", "posts", "meetings"],
+      "componentFields": [],
+      "notes": "6 records. `splash` UploadFile, `attachments` [UploadFile]."
+    },
+    {
+      "name": "config",
+      "kind": "collectionType",
+      "queryName": "configs",
+      "sqlTable": "configs",
+      "draftAndPublish": false,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "4 records. NOT a singleton despite the name. `config` is opaque JSON."
+    },
+    {
+      "name": "regulation",
+      "kind": "collectionType",
+      "queryName": "regulations",
+      "sqlTable": "regulations",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "2 records. Just url + summary."
+    },
+    {
+      "name": "home",
+      "kind": "singleType",
+      "queryName": "home",
+      "sqlTable": "homes",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": false,
+      "hasComponents": true,
+      "dominantRelations": [],
+      "componentFields": [
+        { "field": "homeCarousel", "component": "carousel.carousel", "repeatable": false },
+        { "field": "clickThroughBoxes", "component": "clickthrough.clickthrough", "repeatable": true },
+        { "field": "homeBanner", "component": "banner.banner", "repeatable": false }
+      ],
+      "notes": "True Strapi 5 singleType. Components only."
+    },
+    {
+      "name": "build",
+      "kind": "collectionType",
+      "queryName": "builds",
+      "sqlTable": "builds",
+      "draftAndPublish": true,
+      "hasDrafts": false,
+      "skipDefault": true,
+      "hasComponents": false,
+      "dominantRelations": [],
+      "componentFields": [],
+      "notes": "0 records in source. Skipped in v1; re-enable if ICJIA creates a Build entry."
+    }
+  ],
+  "components": [
+    { "category": "carousel", "name": "carousel", "ref": "carousel.carousel", "nests": ["slide.slide"] },
+    { "category": "slide", "name": "slide", "ref": "slide.slide", "nests": [], "uploadFields": ["image"] },
+    { "category": "clickthrough", "name": "clickthrough", "ref": "clickthrough.clickthrough", "nests": [] },
+    { "category": "banner", "name": "banner", "ref": "banner.banner", "nests": [] },
+    { "category": "external", "name": "external-url", "ref": "external.external-url", "nests": [] },
+    { "category": "button", "name": "button", "ref": "button.button", "nests": ["menu-item.menu-item"] },
+    { "category": "menu-item", "name": "menu-item", "ref": "menu-item.menu-item", "nests": [] },
+    { "category": "slider-button", "name": "slider-button", "ref": "slider-button.slider-button", "nests": ["menu-item.menu-item"] },
+    { "category": "countdown", "name": "countdown", "ref": "countdown.countdown", "nests": [] },
+    { "category": "event", "name": "add-event", "ref": "event.add-event", "nests": [] }
+  ],
+  "orphanTables": {
+    "description": "Tables present in data.db without a corresponding Strapi 3 model. Excluded from v1 migration per plan decision.",
+    "tables": [
+      { "table": "pubs", "rowCount": 1029, "note": "Suspected pre-rename Publication archive. Verify before final cutover via SELECT MAX(updated_at)." },
+      { "table": "funding_opportunities", "rowCount": 34, "note": "No model. Likely deprecated content type." },
+      { "table": "documents", "rowCount": 0, "note": "No model, empty table." },
+      { "table": "site_configs", "rowCount": 1, "note": "No model. Singleton-shaped config row." },
+      { "table": "context_menus", "rowCount": 1, "note": "No model. Singleton-shaped row." }
+    ]
+  }
+}

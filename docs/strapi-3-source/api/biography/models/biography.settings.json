@@ -1,0 +1,91 @@
+{
+  "kind": "collectionType",
+  "collectionName": "biographies",
+  "info": {
+    "name": "biography",
+    "description": ""
+  },
+  "options": {
+    "increments": true,
+    "timestamps": true,
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "firstName": {
+      "type": "string"
+    },
+    "lastName": {
+      "type": "string"
+    },
+    "email": {
+      "type": "email"
+    },
+    "bio": {
+      "type": "richtext"
+    },
+    "title": {
+      "type": "string"
+    },
+    "unit": {
+      "model": "unit"
+    },
+    "affiliation": {
+      "type": "enumeration",
+      "enum": [
+        "staff",
+        "board",
+        "external"
+      ],
+      "default": "staff",
+      "required": true
+    },
+    "fullName": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "fullName",
+      "required": true
+    },
+    "sortField": {
+      "type": "string",
+      "required": true
+    },
+    "sortModifier": {
+      "type": "integer",
+      "default": 100
+    },
+    "suffix": {
+      "type": "string"
+    },
+    "headshot": {
+      "model": "file",
+      "via": "related",
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos"
+      ],
+      "plugin": "upload",
+      "required": false,
+      "pluginOptions": {}
+    },
+    "searchMeta": {
+      "type": "text"
+    },
+    "tags": {
+      "collection": "tag",
+      "via": "biographies",
+      "dominant": true
+    },
+    "posts": {
+      "via": "biographies",
+      "collection": "post"
+    },
+    "grants": {
+      "via": "biographies",
+      "collection": "grant"
+    }
+  }
+}
