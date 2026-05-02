@@ -59,9 +59,13 @@ function quoteIdent(name) {
   return `"${name}"`;
 }
 
+// Hook for whitelisting source records or upload files we deliberately don't
+// migrate (e.g., a record with NULL required fields, a corrupt source image).
+// Empty by default — the source data was cleaned up in v0.7.x. Add entries
+// here if a future run encounters records that need to be skipped.
 const KNOWN_ACCEPTABLE_FAILURES = {
-  uploadFiles: ['Headshot_Smith_50472f6c9b'],
-  records: { grant: ['357'] },
+  uploadFiles: [],
+  records: {},
 };
 
 /**

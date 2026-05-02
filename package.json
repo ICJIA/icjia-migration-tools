@@ -1,6 +1,6 @@
 {
   "name": "icjia-public-cms-migration-2026",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "private": true,
   "type": "module",
   "description": "API-to-API migration tool for the ICJIA public website: Strapi 3 (SQLite) → Strapi 5 (SQLite). Forked from icjia-hub-migration-tools.",

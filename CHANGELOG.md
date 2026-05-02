@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4] - 2026-05-02
+
+### Removed — stale "Known acceptable issues" boilerplate
+
+- `07-generate-report.js`: removed hardcoded callouts for the
+  `Headshot_Smith_50472f6c9b.jpg` orphan and `Grant id 357` null-title
+  draft from both the HTML and DOCX templates. These were artifacts of
+  earlier source data; they no longer apply (data was cleaned in v0.7.x)
+  and were misleading reviewers into thinking the migration had open
+  issues.
+- `06-audit.js`: cleared `KNOWN_ACCEPTABLE_FAILURES` of those entries.
+  The structure is preserved as an empty hook for future whitelisting.
+- Final reports now show no "Known acceptable issues" section unless one
+  is added back deliberately.
+
 ## [0.9.3] - 2026-05-02
 
 ### Fixed — Phase 4c (timestamp restoration) silently no-op'd

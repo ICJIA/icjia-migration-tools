@@ -185,14 +185,6 @@ function buildHtml(data) {
 <tbody>${ctRows}</tbody>
 </table>
 
-<h2>Known acceptable issues</h2>
-<div class="note">
-  <strong>1 source UploadFile rejected by Strapi 5 image processor:</strong> <code>Headshot_Smith_50472f6c9b.jpg</code> — Sharp rejected the file as "not a valid image" due to unusual EXIF orientation metadata. The file is an orphan (not referenced by any record) so the migration is unaffected.
-</div>
-<div class="note">
-  <strong>1 source record skipped:</strong> Grant id 357 had <code>title: null</code> in the source — an empty draft record never filled in. Strapi 5's schema requires title; the record was logged but not migrated. No content lost (the record had only a category set).
-</div>
-
 <h2>Pipeline summary</h2>
 <table>
 <thead><tr><th>Phase</th><th>Output</th></tr></thead>
@@ -275,11 +267,6 @@ function buildDocx(data) {
     );
     children.push(new Table({ rows: [headerRow, ...typeRows] }));
   }
-
-  children.push(p(' ', {}));
-  children.push(p('Known Acceptable Issues', { heading: HeadingLevel.HEADING_2, bold: true, size: 28 }));
-  children.push(p('1. Headshot_Smith_50472f6c9b.jpg — rejected by Strapi 5 sharp for unusual EXIF orientation. Orphan file (not referenced by any record); migration unaffected.'));
-  children.push(p('2. Grant id 357 — empty draft with null title in source. Strapi 5 requires title; record skipped. No content lost.'));
 
   return new Document({ sections: [{ children }] });
 }
