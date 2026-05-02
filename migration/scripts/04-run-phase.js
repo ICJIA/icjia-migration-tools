@@ -43,7 +43,23 @@ function runScript(scriptPath, args = []) {
   });
 }
 
-function promptUser(question) {
+// Non-interactive when --yes/-y is passed, CI=true is set, or stdin isn't a
+// TTY (script piped, run in the background, etc.). Phase 4's prompts gate
+// physical actions (stopping/restarting Strapi 5), so non-interactive answers
+// are chosen carefully: timestamp prompt → "skip" (don't run a SQLite UPDATE
+// while Strapi 5 might still hold the file lock), verify prompt → "yes"
+// (Strapi 5 should still be running since we never asked the user to stop it).
+const NON_INTERACTIVE =
+  process.argv.includes('--yes') ||
+  process.argv.includes('-y') ||
+  process.env.CI === 'true' ||
+  !process.stdin.isTTY;
+
+function promptUser(question, autoAnswer) {
+  if (NON_INTERACTIVE) {
+    process.stdout.write(`${question}${YELLOW}[auto: ${autoAnswer}]${RESET}\n`);
+    return Promise.resolve(autoAnswer);
+  }
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
@@ -101,7 +117,7 @@ async function main() {
       console.log(`${YELLOW}!${RESET} This step requires Strapi 5 to be ${BOLD}STOPPED${RESET} so it can write directly to its SQLite DB.`);
       console.log(`  In your Strapi 5 terminal: press ${CYAN}Ctrl+C${RESET} to stop it.`);
       console.log('');
-      const answer = await promptUser('  Type "yes" once Strapi 5 is stopped (or "skip" to skip timestamp restoration): ');
+      const answer = await promptUser('  Type "yes" once Strapi 5 is stopped (or "skip" to skip timestamp restoration): ', 'skip');
       if (answer === 'skip' || answer === 's') {
         console.log(`  ${YELLOW}Skipping timestamp restoration.${RESET} Timestamps will reflect the migration date.`);
         continue;
@@ -116,7 +132,7 @@ async function main() {
       console.log(`${YELLOW}!${RESET} This step requires Strapi 5 to be ${BOLD}RUNNING${RESET} again.`);
       console.log(`  In your Strapi 5 terminal: ${CYAN}pnpm develop${RESET}`);
       console.log('');
-      const answer = await promptUser('  Type "yes" once Strapi 5 is back up: ');
+      const answer = await promptUser('  Type "yes" once Strapi 5 is back up: ', 'yes');
       if (answer !== 'yes' && answer !== 'y') {
         console.log(`${RED}Aborting Phase 4.${RESET} Re-run when ready.`);
         process.exit(1);

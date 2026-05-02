@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-05-02
+
+### Fixed — orchestrators no longer skip steps when run non-interactively
+
+- `01-run-phase.js`, `02-run-phase.js`, `04-run-phase.js`: prompts now
+  detect `process.stdin.isTTY === false`, the `CI=true` env var, or a
+  `--yes`/`-y` flag and auto-answer instead of receiving EOF and falling
+  through to the next step. Symptom this fixes: piping the orchestrators
+  into `node ... > log.log 2>&1` (e.g., from a CI pipeline or a
+  background shell job) silently skipped the schema-generation step
+  inside Phase 1, leaving Strapi 5 with an empty `src/api/` and every
+  Phase 4 POST returning HTTP 405.
+- Phase 1 + 2 prompts auto-answer **yes** (default).
+- Phase 4's timestamp prompt auto-answers **skip** when non-interactive
+  (running a SQLite UPDATE while Strapi 5 may still hold the file lock
+  is unsafe). Re-run timestamp restoration manually with Strapi 5 stopped.
+- Phase 4's verify prompt auto-answers **yes** (Strapi 5 was never asked
+  to stop, so it should still be reachable).
+- Each auto-answer prints a `[auto: ...]` notice next to the prompt for
+  audit trail.
+- Destructive utility scripts (`reset-remote.js`, `reset-strapi5.js`,
+  `set-strapi5-url.js`) intentionally still require interactive input.
+
 ## [0.9.0] - 2026-05-02
 
 ### Added — fix "Modified" status on migrated records

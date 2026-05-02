@@ -49,12 +49,20 @@ function runScript(scriptPath) {
   });
 }
 
-/**
- * Prompt yes/no with default Y.
- * @param {string} question
- * @returns {Promise<boolean>}
- */
+// Non-interactive when --yes/-y is passed, CI=true is set, or stdin isn't a
+// TTY (script piped, run in the background, etc.). Without this guard,
+// prompts would receive EOF and the orchestrator would silently skip steps.
+const NON_INTERACTIVE =
+  process.argv.includes('--yes') ||
+  process.argv.includes('-y') ||
+  process.env.CI === 'true' ||
+  !process.stdin.isTTY;
+
 function promptYesNo(question) {
+  if (NON_INTERACTIVE) {
+    process.stdout.write(`${question}${YELLOW}[auto: yes]${RESET}\n`);
+    return Promise.resolve(true);
+  }
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
@@ -65,12 +73,11 @@ function promptYesNo(question) {
   });
 }
 
-/**
- * Wait for enter.
- * @param {string} message
- * @returns {Promise<void>}
- */
 function waitForEnter(message) {
+  if (NON_INTERACTIVE) {
+    process.stdout.write(`${message}${YELLOW}[auto: continuing]${RESET}\n`);
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     rl.question(message, () => { rl.close(); resolve(); });
