@@ -52,24 +52,36 @@ async function readJson(absPath, errMsg) {
 }
 
 /**
- * Write the four files for one content type into the destination structure
- * Strapi 5 expects: schema.json + routes/<name>.js + controllers/<name>.js + services/<name>.js
+ * Detect whether the destination Strapi 5 project is TypeScript or JavaScript.
+ * Returns 'ts' or 'js'. Heuristic: presence of tsconfig.json + src/index.ts.
  */
-async function writeContentType(baseDir, ctName, { schema, boilerplate }) {
-  // schema.json
+function detectStrapi5Lang(strapi5ProjectPath) {
+  if (!strapi5ProjectPath) return 'js';
+  const tsconfig = path.join(strapi5ProjectPath, 'tsconfig.json');
+  if (existsSync(tsconfig)) return 'ts';
+  return 'js';
+}
+
+/**
+ * Write schema + boilerplate files for one content type. Picks .ts or .js
+ * based on the destination project's language.
+ */
+async function writeContentType(baseDir, ctName, { schema, boilerplate }, lang) {
+  const ext = lang === 'ts' ? 'ts' : 'js';
+  const code = boilerplate[lang] || boilerplate.js;
+
   const schemaDir = path.join(baseDir, ctName, 'content-types', ctName);
   await fs.mkdir(schemaDir, { recursive: true });
   await fs.writeFile(path.join(schemaDir, 'schema.json'), JSON.stringify(schema, null, 2) + '\n');
 
-  // routes/controllers/services
   for (const [folder, content] of [
-    ['routes', boilerplate.route],
-    ['controllers', boilerplate.controller],
-    ['services', boilerplate.service],
+    ['routes', code.route],
+    ['controllers', code.controller],
+    ['services', code.service],
   ]) {
     const dir = path.join(baseDir, ctName, folder);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, `${ctName}.js`), content);
+    await fs.writeFile(path.join(dir, `${ctName}.${ext}`), content);
   }
 }
 
@@ -128,13 +140,17 @@ async function main() {
   await fs.mkdir(contentTypesOut, { recursive: true });
   await fs.mkdir(componentsOut, { recursive: true });
 
+  // Detect destination language (TS or JS) so boilerplate matches
+  const s5ProjectPath = path.resolve(ROOT, config.strapi5ProjectPath);
+  const lang = detectStrapi5Lang(s5ProjectPath);
+
   // Write content types
-  console.log(`${BOLD}Writing content-type schemas:${RESET}`);
+  console.log(`${BOLD}Writing content-type schemas (${lang.toUpperCase()} project):${RESET}`);
   let totalFields = 0;
   let totalOverrides = 0;
   let totalIncompleteFixed = 0;
   for (const [ctName, ct] of Object.entries(result.contentTypes)) {
-    await writeContentType(contentTypesOut, ctName, ct);
+    await writeContentType(contentTypesOut, ctName, ct, lang);
     const fieldCount = Object.keys(ct.schema.attributes).length;
     totalFields += fieldCount;
     const overridden = Object.values(ct.fieldMap).filter((f) => f.overridden).length;
@@ -178,7 +194,6 @@ async function main() {
   console.log('');
 
   // Auto-copy into the Strapi 5 project if the directory exists
-  const s5ProjectPath = path.resolve(ROOT, config.strapi5ProjectPath);
   const s5ApiDir = path.join(s5ProjectPath, 'src', 'api');
   const s5ComponentsDir = path.join(s5ProjectPath, 'src', 'components');
 

@@ -1,33 +1,44 @@
 /**
  * @module 04-load
- * @description Phase 4a–4c: Load all content into Strapi 5 in dependency order.
+ * @description Phase 4 step 1: Load all content records into Strapi 5.
  *
- * Loads datasets first (no outbound dominant relations), then apps, then articles.
- * For each record:
- *   1. Check if legacyId already exists (idempotent re-run support)
- *   2. POST to Strapi 5 REST API
- *   3. Capture documentId in ID map
+ * For each active content type:
  *
- * Fields prefixed with `_` are metadata and are stripped from the API payload.
+ *   1. Read `migration/data/transformed/<plural>.json` (Phase 3f output, with
+ *      UploadFile IDs already swapped and richtext URLs rewritten).
  *
- * Outputs:
- * - `migration/data/maps/datasets.json` — Strapi 3 ObjectId → Strapi 5 documentId
- * - `migration/data/maps/apps.json`     — same
- * - `migration/data/maps/articles.json`  — same
- * - `migration/data/load-report.json`    — summary of created/skipped/failed counts
+ *   2. For each record, build a Strapi 5 POST body by:
+ *      - Dropping the source `id` (saved as `legacyId` separately)
+ *      - Dropping snake_case timestamps (`created_at`, `updated_at`,
+ *        `published_at`) — restored separately in 04c-fix-timestamps via
+ *        direct SQLite UPDATE
+ *      - Dropping all relation fields (linked separately in 04b-link-relations)
+ *      - Dropping self-ref fields per SELF_REF_DROPS
+ *      - Keeping scalars, components (inline), and UploadFile m2o refs (`{id}`)
+ *      - Adding `legacyId: <int>` for idempotent re-runs
+ *      - Adding `publishedAt: <iso>` for published, `null` for drafts
+ *
+ *   3. Idempotency: skip if a record with this `legacyId` already exists in S5.
+ *
+ *   4. POST to `/api/<pluralName>` (or PUT for single types via single-type-loader).
+ *
+ *   5. Record source-id → S5 documentId in `migration/data/maps/<plural>.json`.
  *
  * @example
- *   node migration/scripts/04-load.js
- *
- * Prerequisites:
- * - Phase 3 complete (transformed JSON files exist)
- * - Strapi 5 running at configured URL with a full-access API token
+ *   pnpm migrate:phase04          # full Phase 4 (load + link + timestamps + verify)
+ *   node migration/scripts/04-load.js               # just load
+ *   node migration/scripts/04-load.js --type=tag    # one type
+ *   node migration/scripts/04-load.js --force       # bypass idempotency
  */
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
 import { RestClient } from '../lib/rest-client.js';
+import { upsertSingleType } from '../lib/single-type-loader.js';
+import { loadConfig } from '../lib/load-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -35,325 +46,296 @@ const ROOT = path.resolve(__dirname, '../..');
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-import { loadConfig } from '../lib/load-config.js';
 const config = await loadConfig();
 
-/**
- * Delay execution for the configured number of milliseconds.
- * @param {number} ms - Milliseconds to wait
- * @returns {Promise<void>}
- */
-function delay(ms) {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
+const argv = process.argv.slice(2);
+const TYPE_FILTER = argv.find((a) => a.startsWith('--type='))?.slice('--type='.length);
+const FORCE = argv.includes('--force');
+
+const SYSTEM_TIMESTAMP_FIELDS = new Set(['created_at', 'updated_at', 'createdAt', 'updatedAt']);
+const SELF_REF_DROPS = new Set(['post.posts', 'post.post']);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function loadManifest() {
+  return JSON.parse(await fs.readFile(path.resolve(ROOT, config.paths.contentTypesManifest), 'utf8'));
+}
+
+async function loadSourceSchema() {
+  return JSON.parse(await fs.readFile(path.resolve(ROOT, config.paths.introspection, 'source-schema.json'), 'utf8'));
 }
 
 /**
- * Strip all fields whose keys start with `_` from a record.
- * These are migration metadata and must not be sent to the Strapi 5 API.
- *
- * @param {Object} record - The transformed record
- * @returns {Object} A shallow copy with `_` prefixed fields removed
+ * Classify each attribute on a content type so the loader knows what to do
+ * with it: scalar (keep), component (keep inline), upload (keep as {id}),
+ * or relation (drop — linked separately in 04b).
  */
-function stripInternalFields(record) {
-  const cleaned = {};
+function classifyAttributes(model) {
+  const scalars = new Set();
+  const components = new Set();
+  const uploads = new Set();
+  const relations = new Set();
+
+  for (const [name, def] of Object.entries(model?.attributes || {})) {
+    if (def.plugin === 'upload') {
+      uploads.add(name);
+    } else if (def.type === 'component') {
+      components.add(name);
+    } else if (def.collection || def.model) {
+      relations.add(name);
+    } else {
+      scalars.add(name);
+    }
+  }
+  return { scalars, components, uploads, relations };
+}
+
+/**
+ * Build the POST body for one record.
+ * Strips dropped fields, preserves scalars/components/uploads, adds legacyId
+ * and publishedAt.
+ */
+function buildRecordBody(record, ctName, classified) {
+  const body = {};
+
   for (const [key, value] of Object.entries(record)) {
-    if (!key.startsWith('_')) {
-      cleaned[key] = value;
-    }
+    if (key === 'id') continue;
+    if (SYSTEM_TIMESTAMP_FIELDS.has(key)) continue;
+    if (key === 'published_at') continue;
+    if (SELF_REF_DROPS.has(`${ctName}.${key}`)) continue;
+    if (classified.relations.has(key)) continue;
+
+    body[key] = value;
   }
-  return cleaned;
+
+  const sourceIdNum = parseInt(record.id, 10);
+  if (!Number.isNaN(sourceIdNum)) {
+    body.legacyId = sourceIdNum;
+  }
+
+  // Preserve draft/publish state — null for drafts, ISO string for published
+  if (record.published_at) {
+    body.publishedAt = record.published_at;
+  } else {
+    body.publishedAt = null;
+  }
+
+  return body;
 }
 
 /**
- * Strip relation fields that should not be included in the initial create.
- * Relations are linked in a separate pass (04b-link-relations.js).
- *
- * @param {Object} payload - The cleaned record payload
- * @param {string[]} relationFields - Field names to remove (e.g., ['datasets', 'apps', 'articles'])
- * @returns {Object} Payload without relation fields
+ * Look up an existing record in Strapi 5 by legacyId. Returns the documentId,
+ * or null if not found.
  */
-function stripRelationFields(payload, relationFields) {
-  const cleaned = { ...payload };
-  for (const field of relationFields) {
-    delete cleaned[field];
-  }
-  return cleaned;
-}
-
-/**
- * Check if a record with the given legacyId already exists in Strapi 5.
- *
- * @param {RestClient} client - Configured REST client
- * @param {string} pluralName - Plural API name (e.g., "datasets")
- * @param {string} legacyId - The Strapi 3 ObjectId to check
- * @returns {Promise<Object|null>} Existing record data if found, null otherwise
- */
-async function checkDuplicate(client, pluralName, legacyId) {
-  const result = await client.get(`/api/${pluralName}`, {
+async function findExistingByLegacyId(client, ctManifest, legacyId) {
+  const pluralName = restPluralName(ctManifest);
+  const params = {
     'filters[legacyId][$eq]': legacyId,
+    'fields[0]': 'documentId',
     'pagination[pageSize]': 1,
-  });
-
-  if (result.data && result.data.length > 0) {
-    return result.data[0];
+    publicationState: 'preview', // include drafts
+  };
+  try {
+    const result = await client.get(`/api/${pluralName}`, params);
+    const found = result.data?.[0];
+    return found?.documentId || null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
-/**
- * Load all records for a single content type into Strapi 5.
- *
- * @param {Object} options - Load options
- * @param {RestClient} options.client - Configured REST client
- * @param {string} options.pluralName - Plural API name (e.g., "datasets")
- * @param {string} options.label - Display label for logging (e.g., "datasets")
- * @param {Object[]} options.records - Transformed records to load
- * @param {string[]} options.relationFields - Relation fields to strip from payload
- * @param {number} options.delayMs - Delay between requests in milliseconds
- * @returns {Promise<Object>} ID map: legacyId → { strapi5Id, strapi5DocumentId, legacyId }
- */
-async function loadContentType({ client, pluralName, label, records, relationFields, delayMs }) {
-  console.log(`\nLoading ${label}: ${records.length} records`);
-  const idMap = {};
-  let created = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
-    const legacyId = record.legacyId;
-    const progress = `${i + 1}/${records.length}`;
-
-    if (!legacyId) {
-      console.log(`  ${RED}${progress}: Record has no legacyId — skipping${RESET}`);
-      failed++;
-      continue;
-    }
-
-    try {
-      // Check for duplicates
-      const existing = await checkDuplicate(client, pluralName, legacyId);
-
-      if (existing) {
-        // Record already exists — capture its IDs and skip
-        idMap[legacyId] = {
-          strapi5Id: existing.id,
-          strapi5DocumentId: existing.documentId,
-          legacyId,
-        };
-        console.log(`  ${YELLOW}${progress}: ${record.slug || legacyId} — already exists (skipped)${RESET}`);
-        skipped++;
-      } else {
-        // Strip internal and relation fields, then POST
-        let payload = stripInternalFields(record);
-        payload = stripRelationFields(payload, relationFields);
-
-        let result;
-        try {
-          result = await client.post(`/api/${pluralName}`, payload);
-        } catch (postErr) {
-          // Handle slug collision: if uid field rejects a duplicate slug, append legacyId suffix
-          if (postErr.message?.includes('unique') || postErr.message?.includes('already being used') || postErr.message?.includes('must be unique')) {
-            const origSlug = payload.slug;
-            payload.slug = `${payload.slug}-${legacyId.slice(-6)}`;
-            console.log(`  ${YELLOW}${progress}: slug "${origSlug}" already exists — retrying as "${payload.slug}"${RESET}`);
-            result = await client.post(`/api/${pluralName}`, payload);
-          } else {
-            throw postErr;
-          }
-        }
-
-        if (result.data) {
-          idMap[legacyId] = {
-            strapi5Id: result.data.id,
-            strapi5DocumentId: result.data.documentId,
-            legacyId,
-          };
-          console.log(`  ${GREEN}${progress}: ${record.slug || legacyId} — created${RESET}`);
-          created++;
-        } else {
-          console.log(`  ${RED}${progress}: ${record.slug || legacyId} — unexpected response (no data)${RESET}`);
-          failed++;
-        }
-      }
-    } catch (err) {
-      console.error(`  ${RED}${progress}: ${record.slug || legacyId} — ERROR: ${err.message}${RESET}`);
-      failed++;
-    }
-
-    // Delay between requests to avoid overwhelming Strapi 5
-    if (delayMs > 0 && i < records.length - 1) {
-      await delay(delayMs);
-    }
-  }
-
-  console.log(
-    `  ${label} complete: ${GREEN}${created} created${RESET}, ` +
-    `${YELLOW}${skipped} skipped${RESET}, ` +
-    `${failed > 0 ? RED : GREEN}${failed} failed${RESET}`,
-  );
-
-  return { idMap, created, skipped, failed };
+function restPluralName(manifest) {
+  if (manifest.kind === 'singleType') return manifest.name;
+  return (manifest.queryName || manifest.name)
+    .replace(/_/g, '-')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase();
 }
-
-// ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('=== Phase 4: Data Loading ===\n');
-
-  // Show config
-  console.log('Configuration:');
-  console.log(`  Strapi 5 API:      ${config.strapi5.apiUrl}`);
-  console.log(`  Strapi 5 token:    ${config.strapi5.token ? '(set)' : `${RED}(not set)${RESET}`}`);
-  console.log(`  Request delay:     ${config.settings.requestDelayMs}ms`);
-  console.log(`  Request timeout:   ${config.settings.requestTimeoutMs}ms`);
-  console.log(`  Transformed data:  ${config.paths.transformedData}`);
-  console.log(`  Maps output:       ${config.paths.maps}`);
-  console.log('');
+  console.log(`${BOLD}── Phase 4 step 1: Load records into Strapi 5 ──${RESET}\n`);
 
   if (!config.strapi5.token) {
-    console.error(`${RED}ERROR: Strapi 5 API token is not set in config.js${RESET}`);
-    console.error(`${RED}Set strapi5.token in config.js or STRAPI5_TOKEN env variable.${RESET}`);
+    console.error(`${RED}ERROR${RESET} STRAPI5_TOKEN is not set. Edit config.js or export the env var.`);
     process.exit(1);
   }
 
-  const client = new RestClient(config.strapi5.apiUrl, {
-    token: config.strapi5.token,
-    timeoutMs: config.settings.requestTimeoutMs,
-  });
+  const manifest = await loadManifest();
+  const sourceSchema = await loadSourceSchema();
 
-  // Verify Strapi 5 is reachable
-  console.log('Checking Strapi 5 connectivity...');
-  try {
-    await client.get('/api/content-type-builder/content-types');
-    console.log(`  ${GREEN}Strapi 5 is reachable${RESET}\n`);
-  } catch (err) {
-    console.error(`\n${RED}ERROR: Cannot connect to Strapi 5 at ${config.strapi5.apiUrl}${RESET}`);
-    console.error(`${RED}${err.message}${RESET}`);
-    console.error(`\n${RED}Ensure Strapi 5 is running and the API URL in config.js is correct.${RESET}`);
-    process.exit(1);
+  let activeTypes = manifest.contentTypes.filter((c) => !c.skipDefault);
+  if (TYPE_FILTER) {
+    activeTypes = activeTypes.filter((c) => c.name === TYPE_FILTER);
+    if (activeTypes.length === 0) {
+      console.error(`${RED}ERROR${RESET} no active type matches --type=${TYPE_FILTER}`);
+      process.exit(1);
+    }
   }
 
-  // Read transformed data
+  const schemaByName = new Map(sourceSchema.contentTypes.map((e) => [e.manifest.name, e]));
+
   const transformedDir = path.resolve(ROOT, config.paths.transformedData);
   const mapsDir = path.resolve(ROOT, config.paths.maps);
   await fs.mkdir(mapsDir, { recursive: true });
 
-  let datasets, apps, articles;
-  try {
-    datasets = JSON.parse(await fs.readFile(path.join(transformedDir, 'datasets.json'), 'utf8'));
-    apps = JSON.parse(await fs.readFile(path.join(transformedDir, 'apps.json'), 'utf8'));
-    articles = JSON.parse(await fs.readFile(path.join(transformedDir, 'articles.json'), 'utf8'));
-  } catch (err) {
-    console.error(`\n${RED}ERROR: Could not read transformed data: ${err.message}${RESET}`);
-    console.error(`${RED}Ensure Phase 3 is complete and transformed files exist in ${config.paths.transformedData}${RESET}`);
+  const client = new RestClient(config.strapi5.apiUrl, {
+    token: config.strapi5.token,
+    timeoutMs: config.settings?.requestTimeoutMs || 30000,
+  });
+
+  const delay = config.settings?.requestDelayMs || 100;
+
+  console.log(`Configuration:`);
+  console.log(`  Strapi 5 API:    ${CYAN}${config.strapi5.apiUrl}${RESET}`);
+  console.log(`  Transformed dir: ${CYAN}${path.relative(ROOT, transformedDir)}${RESET}`);
+  console.log(`  Maps dir:        ${CYAN}${path.relative(ROOT, mapsDir)}${RESET}`);
+  console.log(`  Active types:    ${activeTypes.length}${TYPE_FILTER ? ` (filtered to ${TYPE_FILTER})` : ''}`);
+  console.log(`  Idempotency:     ${FORCE ? `${YELLOW}--force (skip legacyId check)${RESET}` : `${GREEN}skip if legacyId exists${RESET}`}`);
+  console.log('');
+
+  const overall = { types: 0, created: 0, skipped: 0, failed: 0, drafts: 0 };
+
+  for (const ct of activeTypes) {
+    const t0 = Date.now();
+    const filePath = path.join(transformedDir, ct.queryName + '.json');
+    const mapPath = path.join(mapsDir, ct.queryName + '.json');
+
+    if (!existsSync(filePath)) {
+      console.log(`  ${YELLOW}skip${RESET} ${ct.name} (no transformed file)`);
+      continue;
+    }
+
+    const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    const records = Array.isArray(parsed) ? parsed : [parsed];
+
+    const sourceEntry = schemaByName.get(ct.name);
+    if (!sourceEntry) {
+      console.log(`  ${YELLOW}skip${RESET} ${ct.name} (no source schema entry)`);
+      continue;
+    }
+    const classified = classifyAttributes(sourceEntry.model);
+
+    let map = {};
+    if (existsSync(mapPath) && !FORCE) {
+      try {
+        map = JSON.parse(await fs.readFile(mapPath, 'utf8'));
+      } catch {
+        map = {};
+      }
+    }
+
+    const stats = { created: 0, skipped: 0, failed: 0, drafts: 0, errors: [] };
+
+    for (let i = 0; i < records.length; i++) {
+      const rec = records[i];
+      const sourceId = String(rec.id);
+
+      if (map[sourceId]?.documentId && !FORCE) {
+        stats.skipped++;
+        continue;
+      }
+
+      const body = buildRecordBody(rec, ct.name, classified);
+      const isDraft = body.publishedAt === null || body.publishedAt === undefined;
+      if (isDraft) stats.drafts++;
+
+      try {
+        let result;
+        if (ct.kind === 'singleType') {
+          result = await upsertSingleType(client, ct.name, body);
+          map[sourceId] = {
+            sourceId,
+            legacyId: body.legacyId,
+            documentId: result.data?.documentId || 'singleton',
+            isSingleton: true,
+          };
+        } else {
+          if (!FORCE && body.legacyId !== undefined) {
+            const existingDocId = await findExistingByLegacyId(client, ct, body.legacyId);
+            if (existingDocId) {
+              map[sourceId] = {
+                sourceId,
+                legacyId: body.legacyId,
+                documentId: existingDocId,
+                preexisting: true,
+              };
+              stats.skipped++;
+              continue;
+            }
+          }
+
+          result = await client.post(`/api/${restPluralName(ct)}`, body);
+          map[sourceId] = {
+            sourceId,
+            legacyId: body.legacyId,
+            documentId: result.data?.documentId,
+            id: result.data?.id,
+          };
+        }
+        stats.created++;
+        if (delay > 0) await sleep(delay);
+      } catch (err) {
+        stats.failed++;
+        stats.errors.push({ sourceId, message: err.message.slice(0, 500) });
+        map[sourceId] = { sourceId, legacyId: body.legacyId, error: err.message };
+      }
+
+      if ((i + 1) % 50 === 0 || i === records.length - 1) {
+        await fs.writeFile(mapPath, JSON.stringify(map, null, 2));
+      }
+    }
+
+    await fs.writeFile(mapPath, JSON.stringify(map, null, 2));
+
+    overall.types++;
+    overall.created += stats.created;
+    overall.skipped += stats.skipped;
+    overall.failed += stats.failed;
+    overall.drafts += stats.drafts;
+
+    const ms = Date.now() - t0;
+    const draftNote = stats.drafts > 0 ? ` ${DIM}(${stats.drafts} drafts)${RESET}` : '';
+    const skipNote = stats.skipped > 0 ? `, ${DIM}${stats.skipped} skipped${RESET}` : '';
+    const failNote = stats.failed > 0 ? `, ${RED}${stats.failed} failed${RESET}` : '';
+    const icon = stats.failed === 0 ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
+    console.log(`  ${icon} ${ct.name.padEnd(16)} ${stats.created.toString().padStart(5)} created${draftNote}${skipNote}${failNote} ${DIM}${ms}ms${RESET}`);
+
+    for (const e of stats.errors.slice(0, 3)) {
+      console.log(`    ${RED}[${e.sourceId}]${RESET} ${e.message.slice(0, 200)}`);
+    }
+  }
+
+  console.log('');
+  console.log(`${BOLD}── Summary ──${RESET}`);
+  console.log(`  Types loaded:    ${overall.types}`);
+  console.log(`  Created:         ${overall.created}`);
+  console.log(`  Skipped:         ${overall.skipped} ${DIM}(idempotency)${RESET}`);
+  console.log(`  Failed:          ${overall.failed}`);
+  console.log(`  Drafts created:  ${overall.drafts}`);
+  console.log('');
+
+  if (overall.failed > 0) {
+    console.log(`${RED}${BOLD}Phase 4 load had failures.${RESET}`);
+    console.log(`Review per-type maps at ${CYAN}migration/data/maps/${RESET} for error details.`);
+    console.log(`Re-run to retry: ${CYAN}node migration/scripts/04-load.js${RESET}`);
+    console.log('');
     process.exit(1);
   }
 
-  console.log(`Records to load: ${datasets.length} datasets, ${apps.length} apps, ${articles.length} articles`);
-
-  const delayMs = config.settings.requestDelayMs || 100;
-  const report = { startedAt: new Date().toISOString(), steps: {} };
-
-  // ── Step 1: Load Datasets ──────────────────────────────────────────
-  console.log(`\n── Step 1/3: Load Datasets ──`);
-  const datasetResult = await loadContentType({
-    client,
-    pluralName: 'datasets',
-    label: 'datasets',
-    records: datasets,
-    relationFields: ['articles', 'apps'],
-    delayMs,
-  });
-
-  await fs.writeFile(
-    path.join(mapsDir, 'datasets.json'),
-    JSON.stringify(datasetResult.idMap, null, 2),
-  );
-  console.log(`  ${GREEN}ID map saved to ${config.paths.maps}/datasets.json${RESET}`);
-  report.steps.datasets = {
-    created: datasetResult.created,
-    skipped: datasetResult.skipped,
-    failed: datasetResult.failed,
-  };
-
-  // ── Step 2: Load Apps ──────────────────────────────────────────────
-  console.log(`\n── Step 2/3: Load Apps ──`);
-  const appResult = await loadContentType({
-    client,
-    pluralName: 'apps',
-    label: 'apps',
-    records: apps,
-    relationFields: ['datasets', 'articles'],
-    delayMs,
-  });
-
-  await fs.writeFile(
-    path.join(mapsDir, 'apps.json'),
-    JSON.stringify(appResult.idMap, null, 2),
-  );
-  console.log(`  ${GREEN}ID map saved to ${config.paths.maps}/apps.json${RESET}`);
-  report.steps.apps = {
-    created: appResult.created,
-    skipped: appResult.skipped,
-    failed: appResult.failed,
-  };
-
-  // ── Step 3: Load Articles ──────────────────────────────────────────
-  console.log(`\n── Step 3/3: Load Articles ──`);
-  const articleResult = await loadContentType({
-    client,
-    pluralName: 'articles',
-    label: 'articles',
-    records: articles,
-    relationFields: ['datasets', 'apps'],
-    delayMs,
-  });
-
-  await fs.writeFile(
-    path.join(mapsDir, 'articles.json'),
-    JSON.stringify(articleResult.idMap, null, 2),
-  );
-  console.log(`  ${GREEN}ID map saved to ${config.paths.maps}/articles.json${RESET}`);
-  report.steps.articles = {
-    created: articleResult.created,
-    skipped: articleResult.skipped,
-    failed: articleResult.failed,
-  };
-
-  // ── Save Load Report ──────────────────────────────────────────────
-  report.completedAt = new Date().toISOString();
-  report.totals = {
-    created: datasetResult.created + appResult.created + articleResult.created,
-    skipped: datasetResult.skipped + appResult.skipped + articleResult.skipped,
-    failed: datasetResult.failed + appResult.failed + articleResult.failed,
-  };
-
-  const reportPath = path.resolve(ROOT, 'migration/data/load-report.json');
-  await fs.writeFile(reportPath, JSON.stringify(report, null, 2));
-  console.log(`\nLoad report saved to migration/data/load-report.json`);
-
-  // ── Summary ────────────────────────────────────────────────────────
-  console.log('\n--- Summary ---');
-  console.log(`  Datasets:  ${datasetResult.created} created, ${datasetResult.skipped} skipped, ${datasetResult.failed} failed`);
-  console.log(`  Apps:      ${appResult.created} created, ${appResult.skipped} skipped, ${appResult.failed} failed`);
-  console.log(`  Articles:  ${articleResult.created} created, ${articleResult.skipped} skipped, ${articleResult.failed} failed`);
-  console.log(`  Total:     ${report.totals.created} created, ${report.totals.skipped} skipped, ${report.totals.failed} failed`);
-
-  if (report.totals.failed > 0) {
-    console.log(`\n${YELLOW}WARNING: ${report.totals.failed} record(s) failed to load.${RESET}`);
-    console.log(`${YELLOW}Review the errors above, fix the transformed data, and re-run.${RESET}`);
-    console.log(`${YELLOW}Successfully loaded records will be skipped on re-run (idempotent).${RESET}`);
-  }
-
-  console.log(`\n${GREEN}Phase 4a-4c (data loading) complete.${RESET}`);
-  console.log('Next: pnpm migrate:phase04 (or node migration/scripts/04b-link-relations.js)');
+  console.log(`${GREEN}${BOLD}Phase 4 load complete.${RESET}`);
+  console.log('');
+  console.log('Next: 04b-link-relations (link m2m + m2o relations)');
+  console.log(`  ${CYAN}node migration/scripts/04b-link-relations.js${RESET}`);
+  console.log('');
 }
 
 main().catch((err) => {
   console.error(`\n${RED}FATAL: ${err.message}${RESET}`);
+  console.error(err.stack);
   process.exit(1);
 });

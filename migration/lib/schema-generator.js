@@ -328,15 +328,24 @@ function generateComponentSchema(entry, fieldTypeMap) {
 
 /**
  * Generate minimal Strapi 5 boilerplate (route, controller, service) for a content type.
- * Uses CommonJS to match Strapi 5 project defaults.
+ * Returns BOTH .js and .ts contents so the writer can pick whichever the
+ * destination Strapi 5 project expects.
  */
 function generateBoilerplate(ctName) {
   const uid = `api::${ctName}.${ctName}`;
-  return {
+  // Strapi 5 TS project format
+  const ts = {
+    route: `import { factories } from '@strapi/strapi';\n\nexport default factories.createCoreRouter('${uid}');\n`,
+    controller: `import { factories } from '@strapi/strapi';\n\nexport default factories.createCoreController('${uid}');\n`,
+    service: `import { factories } from '@strapi/strapi';\n\nexport default factories.createCoreService('${uid}');\n`,
+  };
+  // Strapi 5 JS project format (CommonJS)
+  const js = {
     route: `'use strict';\nconst { createCoreRouter } = require('@strapi/strapi').factories;\nmodule.exports = createCoreRouter('${uid}');\n`,
     controller: `'use strict';\nconst { createCoreController } = require('@strapi/strapi').factories;\nmodule.exports = createCoreController('${uid}');\n`,
     service: `'use strict';\nconst { createCoreService } = require('@strapi/strapi').factories;\nmodule.exports = createCoreService('${uid}');\n`,
   };
+  return { ts, js };
 }
 
 /**

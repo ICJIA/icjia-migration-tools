@@ -1,30 +1,34 @@
 /**
  * @module 04c-fix-timestamps
- * @description Phase 4e: Restore original createdAt/updatedAt timestamps via SQLite.
+ * @description Phase 4 step 3: Restore original timestamps via direct SQLite UPDATE.
  *
- * After all content is loaded via the Strapi 5 REST API, the timestamps reflect
- * the migration date. This script directly updates the SQLite database to restore
- * the original Strapi 3 timestamps stored as `_originalCreatedAt` and
- * `_originalUpdatedAt` in the transformed data.
+ * Strapi 5's REST API doesn't allow setting `createdAt` or `updatedAt` —
+ * those are system-managed. After Phase 4 load, every record's timestamps
+ * reflect the migration time, not the original Strapi 3 source.
  *
- * IMPORTANT: Strapi 5 must be STOPPED before running this script.
- * The SQLite database should not be written to by two processes simultaneously.
+ * This script reads the source extracts (raw/<plural>.json) for the original
+ * `created_at` / `updated_at` / `published_at`, and writes them directly into
+ * Strapi 5's SQLite database.
  *
- * Uses `better-sqlite3` for synchronous, reliable SQLite access.
+ * Strapi 5 must be **stopped** while this runs (otherwise SQLite write locks
+ * cause errors). The script verifies this and aborts if Strapi 5 is reachable.
  *
  * @example
- *   node migration/scripts/04c-fix-timestamps.js
- *
- * Prerequisites:
- * - Phase 4a-4d complete (all content loaded and relations linked)
- * - Strapi 5 STOPPED (not running)
- * - `better-sqlite3` installed (`pnpm add better-sqlite3`)
+ *   pnpm migrate:phase04   # full Phase 4 (load + link + timestamps + verify)
+ *   # standalone:
+ *   # 1. Stop Strapi 5 (Ctrl+C in its terminal)
+ *   # 2. node migration/scripts/04c-fix-timestamps.js
+ *   # 3. Restart Strapi 5 (pnpm develop)
  */
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
 import Database from 'better-sqlite3';
+
+import { loadConfig } from '../lib/load-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -32,297 +36,204 @@ const ROOT = path.resolve(__dirname, '../..');
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-import { loadConfig } from '../lib/load-config.js';
 const config = await loadConfig();
 
-/**
- * Content types to process with their file and expected table names.
- * @type {Array<{ singular: string, plural: string, mapFile: string, dataFile: string }>}
- */
-const CONTENT_TYPES = [
-  { singular: 'article', plural: 'articles', mapFile: 'articles.json', dataFile: 'articles.json' },
-  { singular: 'dataset', plural: 'datasets', mapFile: 'datasets.json', dataFile: 'datasets.json' },
-  { singular: 'app', plural: 'apps', mapFile: 'apps.json', dataFile: 'apps.json' },
-];
+async function loadJson(p) {
+  return JSON.parse(await fs.readFile(p, 'utf8'));
+}
 
 /**
- * Find the actual table name for a content type by querying sqlite_master.
- * Checks for both singular and plural forms.
- *
- * @param {import('better-sqlite3').Database} db - SQLite database handle
- * @param {string} singular - Singular name (e.g., "article")
- * @param {string} plural - Plural name (e.g., "articles")
- * @returns {string|null} The actual table name found, or null
+ * Probe Strapi 5 to make sure it's NOT running (we're about to grab the
+ * SQLite write lock). If we can fetch from /admin or /api/.../, refuse.
  */
-function findTableName(db, singular, plural) {
-  const tables = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-    .all()
-    .map((row) => row.name);
-
-  // Check singular first (Strapi 3 collectionName convention), then plural
-  if (tables.includes(singular)) return singular;
-  if (tables.includes(plural)) return plural;
-
-  // Case-insensitive fallback
-  const lower = singular.toLowerCase();
-  const lowerPlural = plural.toLowerCase();
-  for (const t of tables) {
-    if (t.toLowerCase() === lower || t.toLowerCase() === lowerPlural) return t;
+async function checkStrapi5IsStopped() {
+  try {
+    const res = await fetch(`${config.strapi5.apiUrl}/_health`, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.status === 204 || res.status === 200) {
+      return { stopped: false, status: res.status };
+    }
+  } catch {
+    return { stopped: true };
   }
-
-  return null;
+  return { stopped: false };
 }
-
-/**
- * Get column info for a table to verify expected columns exist.
- *
- * @param {import('better-sqlite3').Database} db - SQLite database handle
- * @param {string} tableName - Table name to inspect
- * @returns {string[]} Array of column names
- */
-function getColumnNames(db, tableName) {
-  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
-  return columns.map((col) => col.name);
-}
-
-/**
- * Update timestamps for all records of a content type.
- *
- * @param {import('better-sqlite3').Database} db - SQLite database handle
- * @param {string} tableName - Actual table name in the database
- * @param {Object[]} transformedRecords - Array of transformed records with _originalCreatedAt/_originalUpdatedAt
- * @param {Object} idMap - ID map: legacyId -> { strapi5DocumentId, ... }
- * @param {string} documentIdColumn - Actual column name for document_id
- * @param {string} createdAtColumn - Actual column name for created_at
- * @param {string} updatedAtColumn - Actual column name for updated_at
- * @returns {{ updated: number, skipped: number }} Counts
- */
-function updateTimestamps(db, tableName, transformedRecords, idMap, documentIdColumn, createdAtColumn, updatedAtColumn) {
-  const updateStmt = db.prepare(
-    `UPDATE ${tableName} SET ${createdAtColumn} = ?, ${updatedAtColumn} = ? WHERE ${documentIdColumn} = ?`,
-  );
-
-  let updated = 0;
-  let skipped = 0;
-
-  for (const record of transformedRecords) {
-    const legacyId = record.legacyId;
-    if (!legacyId) {
-      skipped++;
-      continue;
-    }
-
-    const mapping = idMap[legacyId];
-    if (!mapping) {
-      skipped++;
-      continue;
-    }
-
-    const createdAt = record._originalCreatedAt;
-    const updatedAt = record._originalUpdatedAt;
-
-    if (!createdAt || !updatedAt) {
-      skipped++;
-      continue;
-    }
-
-    const result = updateStmt.run(createdAt, updatedAt, mapping.strapi5DocumentId);
-    if (result.changes > 0) {
-      updated++;
-    } else {
-      skipped++;
-    }
-  }
-
-  return { updated, skipped };
-}
-
-// ── Main ─────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('=== Phase 4e: Restore Timestamps ===\n');
-
-  // Critical warning
-  console.log(`${RED}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}`);
-  console.log(`${RED}${BOLD}║  WARNING: Strapi 5 should be STOPPED before running     ║${RESET}`);
-  console.log(`${RED}${BOLD}║  this script. SQLite does not handle concurrent writes   ║${RESET}`);
-  console.log(`${RED}${BOLD}║  from multiple processes safely.                         ║${RESET}`);
-  console.log(`${RED}${BOLD}╚══════════════════════════════════════════════════════════╝${RESET}`);
-  console.log('');
+  console.log(`${BOLD}── Phase 4 step 3: Restore original timestamps ──${RESET}\n`);
 
   const dbPath = path.resolve(ROOT, config.strapi5.dbPath);
-  console.log('Configuration:');
-  console.log(`  SQLite DB path:    ${dbPath}`);
-  console.log(`  Transformed data:  ${config.paths.transformedData}`);
-  console.log(`  Maps directory:    ${config.paths.maps}`);
-  console.log('');
-
-  // Verify DB file exists
-  try {
-    await fs.access(dbPath);
-  } catch {
-    console.error(`${RED}ERROR: SQLite database not found at ${dbPath}${RESET}`);
-    console.error(`${RED}Check strapi5.dbPath in config.js${RESET}`);
+  if (!existsSync(dbPath)) {
+    console.error(`${RED}ERROR${RESET} Strapi 5 SQLite DB not found at ${dbPath}`);
+    console.error(`Verify ${CYAN}config.js${RESET} → strapi5.dbPath`);
     process.exit(1);
   }
 
-  // Open database
-  console.log('Opening SQLite database...');
-  const db = new Database(dbPath);
-
-  try {
-    // List all tables for diagnostics
-    const allTables = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .all()
-      .map((row) => row.name);
-    console.log(`  Tables found: ${allTables.join(', ')}\n`);
-
-    const mapsDir = path.resolve(ROOT, config.paths.maps);
-    const transformedDir = path.resolve(ROOT, config.paths.transformedData);
-    let totalUpdated = 0;
-    let totalSkipped = 0;
-
-    for (const ct of CONTENT_TYPES) {
-      // Find actual table name
-      const tableName = findTableName(db, ct.singular, ct.plural);
-      if (!tableName) {
-        console.log(
-          `  ${YELLOW}WARNING: No table found for "${ct.singular}" or "${ct.plural}" — skipping${RESET}`,
-        );
-        continue;
-      }
-
-      // Verify column names
-      const columns = getColumnNames(db, tableName);
-      console.log(`  Table "${tableName}" columns: ${columns.join(', ')}`);
-
-      // Determine actual column names (check for common variations)
-      const documentIdColumn = columns.includes('document_id')
-        ? 'document_id'
-        : columns.includes('documentId')
-          ? 'documentId'
-          : null;
-
-      const createdAtColumn = columns.includes('created_at')
-        ? 'created_at'
-        : columns.includes('createdAt')
-          ? 'createdAt'
-          : null;
-
-      const updatedAtColumn = columns.includes('updated_at')
-        ? 'updated_at'
-        : columns.includes('updatedAt')
-          ? 'updatedAt'
-          : null;
-
-      if (!documentIdColumn || !createdAtColumn || !updatedAtColumn) {
-        console.log(
-          `  ${RED}ERROR: Missing required columns in "${tableName}". ` +
-          `Need document_id (${documentIdColumn || 'NOT FOUND'}), ` +
-          `created_at (${createdAtColumn || 'NOT FOUND'}), ` +
-          `updated_at (${updatedAtColumn || 'NOT FOUND'})${RESET}`,
-        );
-        continue;
-      }
-
-      // Read data
-      const idMap = JSON.parse(
-        await fs.readFile(path.join(mapsDir, ct.mapFile), 'utf8'),
-      );
-      const transformedRecords = JSON.parse(
-        await fs.readFile(path.join(transformedDir, ct.dataFile), 'utf8'),
-      );
-
-      // Update timestamps
-      console.log(`  Updating ${tableName}: ${transformedRecords.length} records`);
-      const { updated, skipped } = updateTimestamps(
-        db,
-        tableName,
-        transformedRecords,
-        idMap,
-        documentIdColumn,
-        createdAtColumn,
-        updatedAtColumn,
-      );
-
-      console.log(
-        `  ${GREEN}${tableName}: ${updated} updated, ${skipped} skipped${RESET}`,
-      );
-      totalUpdated += updated;
-      totalSkipped += skipped;
-
-      // Sample verification
-      const sample = db
-        .prepare(
-          `SELECT ${documentIdColumn}, ${createdAtColumn}, ${updatedAtColumn} FROM ${tableName} LIMIT 5`,
-        )
-        .all();
-
-      if (sample.length > 0) {
-        console.log(`  Sample verification (${tableName}):`);
-        for (const row of sample) {
-          console.log(
-            `    ${GREEN}${documentIdColumn}=${row[documentIdColumn]} -> ` +
-            `${createdAtColumn}=${row[createdAtColumn]}${RESET}`,
-          );
-        }
-      }
-      console.log('');
-    }
-
-    // ── Summary ──────────────────────────────────────────────────────
-    console.log(`Timestamp restoration complete: ${totalUpdated} records updated, ${totalSkipped} skipped`);
-
-    if (totalUpdated === 0) {
-      console.log(
-        `\n${YELLOW}WARNING: No timestamps were updated. This could mean:${RESET}`,
-      );
-      console.log(`${YELLOW}  - ID maps are empty (run 04-load.js first)${RESET}`);
-      console.log(`${YELLOW}  - Transformed data is missing _originalCreatedAt/_originalUpdatedAt${RESET}`);
-      console.log(`${YELLOW}  - document_id values don't match between maps and DB${RESET}`);
-    }
-    // ── Set mainField to "title" for admin display ────────────────────
-    console.log('\nSetting content manager "Entry title" to "title" for all content types...');
-    const contentTypeKeys = [
-      'plugin_content_manager_configuration_content_types::api::article.article',
-      'plugin_content_manager_configuration_content_types::api::dataset.dataset',
-      'plugin_content_manager_configuration_content_types::api::app.app',
-    ];
-
-    for (const key of contentTypeKeys) {
-      try {
-        const row = db.prepare('SELECT value FROM strapi_core_store_settings WHERE key = ?').get(key);
-        if (row?.value) {
-          const config = JSON.parse(row.value);
-          const oldMainField = config.settings?.mainField;
-          config.settings.mainField = 'title';
-          config.settings.defaultSortBy = 'title';
-          db.prepare('UPDATE strapi_core_store_settings SET value = ? WHERE key = ?')
-            .run(JSON.stringify(config), key);
-          const typeName = key.split('::').pop();
-          console.log(`  ${GREEN}✓${RESET} ${typeName}: mainField ${oldMainField} → title`);
-        }
-      } catch (err) {
-        console.log(`  ${YELLOW}⚠ Could not update ${key}: ${err.message}${RESET}`);
-      }
-    }
-  } finally {
-    // Always close the database
-    db.close();
-    console.log('\nSQLite database closed.');
+  const probe = await checkStrapi5IsStopped();
+  if (!probe.stopped) {
+    console.error(`${RED}ERROR${RESET} Strapi 5 appears to be running at ${config.strapi5.apiUrl}.`);
+    console.error(`Stop Strapi 5 (Ctrl+C in its terminal) before this script can write to its SQLite DB.`);
+    console.error(`After this script completes, restart Strapi 5 with ${CYAN}pnpm develop${RESET}.`);
+    process.exit(1);
   }
 
-  console.log(`\n${GREEN}Phase 4e (timestamp restoration + admin config) complete.${RESET}`);
-  console.log(`${YELLOW}Remember to restart Strapi 5 before running verification.${RESET}`);
-  console.log('Next: pnpm migrate:phase04 (or node migration/scripts/04-verify.js)');
+  const manifest = await loadJson(path.resolve(ROOT, config.paths.contentTypesManifest));
+  const activeTypes = manifest.contentTypes.filter((c) => !c.skipDefault);
+
+  const rawDir = path.resolve(ROOT, config.paths.rawData);
+  const mapsDir = path.resolve(ROOT, config.paths.maps);
+
+  console.log(`Configuration:`);
+  console.log(`  Strapi 5 DB:     ${CYAN}${path.relative(ROOT, dbPath)}${RESET}`);
+  console.log(`  Active types:    ${activeTypes.length}`);
+  console.log('');
+
+  const db = new Database(dbPath);
+  // Use WAL mode for better-sqlite3 performance
+  try {
+    db.pragma('journal_mode = WAL');
+  } catch {}
+
+  const overall = { types: 0, updated: 0, missing: 0, errors: [] };
+
+  for (const ct of activeTypes) {
+    const t0 = Date.now();
+    const fileName = ct.queryName + '.json';
+    const rawPath = path.join(rawDir, fileName);
+    const mapPath = path.join(mapsDir, fileName);
+
+    if (!existsSync(rawPath) || !existsSync(mapPath)) {
+      console.log(`  ${YELLOW}skip${RESET} ${ct.name} (raw or map missing)`);
+      continue;
+    }
+
+    const parsed = await loadJson(rawPath);
+    const records = Array.isArray(parsed) ? parsed : [parsed];
+    const map = await loadJson(mapPath);
+
+    // Determine the destination table — Strapi 5 stores it as the schema's collectionName
+    // which we set from manifest.sqlTable in Phase 1. For singletons it's the same
+    // table (with id=1).
+    const tableName = ct.sqlTable;
+
+    // Verify the table exists
+    const tableExists = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`)
+      .get(tableName);
+
+    if (!tableExists) {
+      console.log(`  ${YELLOW}skip${RESET} ${ct.name} (Strapi 5 table "${tableName}" not found)`);
+      continue;
+    }
+
+    // Probe the column names so we know what to update
+    const cols = db
+      .prepare(`PRAGMA table_info(${tableName})`)
+      .all()
+      .map((r) => r.name);
+
+    const updateCols = [];
+    if (cols.includes('created_at')) updateCols.push('created_at');
+    if (cols.includes('updated_at')) updateCols.push('updated_at');
+    if (cols.includes('published_at')) updateCols.push('published_at');
+
+    if (updateCols.length === 0) {
+      console.log(`  ${YELLOW}skip${RESET} ${ct.name} (no timestamp columns in ${tableName})`);
+      continue;
+    }
+
+    // Build a parameterized UPDATE
+    const setClause = updateCols.map((c) => `${c} = ?`).join(', ');
+    const updateStmt = db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`);
+
+    // Wrap in a transaction for atomicity + speed
+    const tx = db.transaction(() => {
+      let updated = 0;
+      let missing = 0;
+      for (const record of records) {
+        const sourceId = String(record.id);
+        const mapEntry = map[sourceId];
+        const docId = mapEntry?.documentId;
+        // For singletons, the strapi5 row id is typically 1 — but we also have `id` from the load
+        const strapi5Id = mapEntry?.id || (ct.kind === 'singleType' ? 1 : null);
+        if (!docId && !strapi5Id) {
+          missing++;
+          continue;
+        }
+
+        const params = updateCols.map((c) => {
+          if (c === 'created_at') return record.created_at || null;
+          if (c === 'updated_at') return record.updated_at || null;
+          if (c === 'published_at') return record.published_at || null;
+          return null;
+        });
+
+        // Strapi 5 row id — better-sqlite3 returns a Number for integer PK
+        if (strapi5Id) {
+          updateStmt.run(...params, strapi5Id);
+          updated++;
+        } else if (docId) {
+          // Look up by document_id when we don't have the integer id
+          const row = db.prepare(`SELECT id FROM ${tableName} WHERE document_id = ?`).get(docId);
+          if (row) {
+            updateStmt.run(...params, row.id);
+            updated++;
+          } else {
+            missing++;
+          }
+        }
+      }
+      return { updated, missing };
+    });
+
+    try {
+      const stats = tx();
+      const ms = Date.now() - t0;
+      overall.types++;
+      overall.updated += stats.updated;
+      overall.missing += stats.missing;
+      const missNote = stats.missing > 0 ? ` ${YELLOW}(${stats.missing} unmapped)${RESET}` : '';
+      console.log(`  ${GREEN}✓${RESET} ${ct.name.padEnd(16)} ${stats.updated.toString().padStart(5)} timestamps fixed${missNote} ${DIM}${ms}ms${RESET}`);
+    } catch (err) {
+      console.log(`  ${RED}✗${RESET} ${ct.name.padEnd(16)} ${err.message}`);
+      overall.errors.push({ type: ct.name, error: err.message });
+    }
+  }
+
+  db.close();
+
+  console.log('');
+  console.log(`${BOLD}── Summary ──${RESET}`);
+  console.log(`  Types updated:    ${overall.types}`);
+  console.log(`  Records updated:  ${overall.updated}`);
+  console.log(`  Unmapped:         ${overall.missing}`);
+  console.log(`  Errors:           ${overall.errors.length}`);
+  console.log('');
+
+  if (overall.errors.length > 0) {
+    console.log(`${RED}${BOLD}Phase 4 fix-timestamps had errors.${RESET}`);
+    process.exit(1);
+  }
+
+  console.log(`${GREEN}${BOLD}Phase 4 fix-timestamps complete.${RESET}`);
+  console.log('');
+  console.log('Restart Strapi 5 to pick up the timestamp updates:');
+  console.log(`  ${CYAN}cd ${config.strapi5ProjectPath} && pnpm develop${RESET}`);
+  console.log('');
+  console.log('Then verify:');
+  console.log(`  ${CYAN}node migration/scripts/04-verify.js${RESET}`);
+  console.log('');
 }
 
 main().catch((err) => {
   console.error(`\n${RED}FATAL: ${err.message}${RESET}`);
+  console.error(err.stack);
   process.exit(1);
 });
