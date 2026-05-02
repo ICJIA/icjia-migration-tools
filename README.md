@@ -74,7 +74,13 @@ cp config.prod.js config.js         # production Strapi 5
 # 3. Set the Strapi 5 API token (required for write phases)
 export STRAPI5_TOKEN="..."          # generate in Strapi 5 admin → Settings → API Tokens
 
-# 4. Run the full pipeline
+# 4. Run preflight to verify everything is ready
+pnpm preflight                      # checks Node, deps, configs, source data,
+                                    # Strapi 3 reachability, Strapi 5 server +
+                                    # token validity. Prints PASS/FAIL/WARN
+                                    # table with actionable guidance.
+
+# 5. Run the full pipeline
 pnpm migrate:full
 
 # Or run individual phases (recommended for first run)
@@ -85,6 +91,29 @@ pnpm migrate:phase04                # load + link relations
 pnpm migrate:phase05                # validate
 pnpm migrate:phase06                # parity audit
 pnpm report                         # HTML + DOCX migration report
+
+# 6. Run postflight for final sign-off
+pnpm postflight                     # runs preflight + validate + audit + report,
+                                    # aggregates final stats: records by type,
+                                    # field comparisons, ERROR/EXPECTED/INFO/OK
+                                    # parity counts, sign-off-ready summary.
+```
+
+**Preflight options:**
+
+```bash
+pnpm preflight --skip-strapi5       # skip Strapi 5 checks (before S5 is set up)
+pnpm preflight --json               # JSON-only output (for CI)
+
+# Custom Strapi 5 port (default :1338):
+STRAPI5_API_URL=http://localhost:1339 pnpm preflight
+```
+
+**Postflight options:**
+
+```bash
+pnpm postflight --skip-report       # faster; skip Phase 7 HTML/DOCX
+pnpm postflight --json              # JSON-only output (for CI)
 ```
 
 ---

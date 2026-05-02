@@ -14,6 +14,8 @@
     "node": ">=18"
   },
   "scripts": {
+    "preflight": "node migration/scripts/preflight.js",
+    "postflight": "node migration/scripts/postflight.js",
     "migrate:full": "node migration/scripts/migrate-full.js",
     "migrate:reset": "node migration/scripts/reset-remote.js",
     "migrate:clean": "node migration/scripts/00-clean.js",
