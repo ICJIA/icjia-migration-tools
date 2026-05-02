@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-05-02
+
+### Removed (Phase 1.1 cleanup)
+
+- 5 unused components dropped from the migration manifest and any
+  `<strapi5>/src/components/` directory: `button.button`,
+  `menu-item.menu-item`, `slider-button.slider-button`,
+  `countdown.countdown`, `event.add-event`. None had any field references
+  in the source data — they were defined in Strapi 3 but never used by
+  any content type. The manifest's
+  `_v1_1_removed_components` block records what was removed for future
+  reference; restore from git history if needed.
+
 ## [0.7.1] - 2026-05-02
 
 ### Added

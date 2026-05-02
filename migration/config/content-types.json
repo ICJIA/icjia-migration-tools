@@ -267,13 +267,12 @@
     { "category": "slide", "name": "slide", "ref": "slide.slide", "nests": [], "uploadFields": ["image"] },
     { "category": "clickthrough", "name": "clickthrough", "ref": "clickthrough.clickthrough", "nests": [] },
     { "category": "banner", "name": "banner", "ref": "banner.banner", "nests": [] },
-    { "category": "external", "name": "external-url", "ref": "external.external-url", "nests": [] },
-    { "category": "button", "name": "button", "ref": "button.button", "nests": ["menu-item.menu-item"] },
-    { "category": "menu-item", "name": "menu-item", "ref": "menu-item.menu-item", "nests": [] },
-    { "category": "slider-button", "name": "slider-button", "ref": "slider-button.slider-button", "nests": ["menu-item.menu-item"] },
-    { "category": "countdown", "name": "countdown", "ref": "countdown.countdown", "nests": [] },
-    { "category": "event", "name": "add-event", "ref": "event.add-event", "nests": [] }
+    { "category": "external", "name": "external-url", "ref": "external.external-url", "nests": [] }
   ],
+  "_v1_1_removed_components": {
+    "_comment": "Phase 1.1 cleanup: these 5 components were defined in the Strapi 3 source but never referenced by any content-type field or by another component. Removed from the v1 migration scope. If they're needed later, restore from git history.",
+    "removed": ["button.button", "menu-item.menu-item", "slider-button.slider-button", "countdown.countdown", "event.add-event"]
+  },
   "orphanTables": {
     "description": "Tables present in data.db without a corresponding Strapi 3 model. Excluded from v1 migration per plan decision.",
     "tables": [
