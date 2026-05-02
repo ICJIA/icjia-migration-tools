@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.9] - 2026-05-02
+
+### Added
+
+- `07-generate-report.js` now copies the HTML and DOCX reports into the
+  Strapi 5 project's `public/` directory. Once Strapi 5 is running,
+  the reports are accessible directly via:
+  - `http://localhost:1337/migration-report.html`
+  - `http://localhost:1337/migration-report.docx`
+  No standalone HTTP server needed — Strapi serves them. The script
+  prints both the localhost URL and a `file://` fallback after generation.
+
+### Fixed
+
+- Missing `DIM` ANSI color constant in 07-generate-report.js caused the
+  script to crash at the very end (after reports were written) with
+  "DIM is not defined". Added the missing constant.
+
 ## [0.7.8] - 2026-05-02
 
 ### Added

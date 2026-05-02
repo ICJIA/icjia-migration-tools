@@ -45,6 +45,7 @@ const ROOT = path.resolve(__dirname, '../..');
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
@@ -302,22 +303,46 @@ async function main() {
   console.log(`  ${GREEN}✓${RESET} HTML  → ${path.relative(ROOT, htmlPath)}`);
 
   // DOCX
+  let docxPath = null;
   try {
     const doc = buildDocx(data);
     const docxBuffer = await Packer.toBuffer(doc);
-    const docxPath = path.join(dataDir, 'migration-report.docx');
+    docxPath = path.join(dataDir, 'migration-report.docx');
     await fs.writeFile(docxPath, docxBuffer);
     console.log(`  ${GREEN}✓${RESET} DOCX  → ${path.relative(ROOT, docxPath)}`);
   } catch (err) {
     console.warn(`  ${RED}!${RESET} DOCX generation failed: ${err.message}`);
   }
 
+  // Copy reports into Strapi 5's public/ so they're served at http://localhost:PORT/
+  let strapi5Url = null;
+  const s5ProjectPath = path.resolve(ROOT, config.strapi5ProjectPath);
+  const s5PublicDir = path.join(s5ProjectPath, 'public');
+  if (existsSync(s5PublicDir)) {
+    try {
+      await fs.copyFile(htmlPath, path.join(s5PublicDir, 'migration-report.html'));
+      if (docxPath) await fs.copyFile(docxPath, path.join(s5PublicDir, 'migration-report.docx'));
+      // Strip trailing slash; keep the rest as-is
+      strapi5Url = config.strapi5.apiUrl.replace(/\/$/, '');
+      console.log(`  ${GREEN}✓${RESET} Copied to Strapi 5 public/ → served at ${CYAN}${strapi5Url}/migration-report.html${RESET}`);
+    } catch (err) {
+      console.warn(`  ${RED}!${RESET} Could not copy to Strapi 5 public/: ${err.message}`);
+    }
+  } else {
+    console.log(`  ${DIM}Strapi 5 public/ not found at ${path.relative(ROOT, s5PublicDir)} — skipping localhost link${RESET}`);
+  }
+
   console.log('');
   console.log(`${GREEN}${BOLD}Phase 7 complete.${RESET}`);
   console.log('');
   console.log('Reports ready for stakeholder review:');
-  console.log(`  Open ${CYAN}migration/data/migration-report.html${RESET} in a browser`);
-  console.log(`  Share ${CYAN}migration/data/migration-report.docx${RESET} as a Word document`);
+  if (strapi5Url) {
+    console.log(`  ${BOLD}Open in browser:${RESET}  ${CYAN}${strapi5Url}/migration-report.html${RESET}`);
+    console.log(`  ${BOLD}DOCX download:${RESET}    ${CYAN}${strapi5Url}/migration-report.docx${RESET}`);
+    console.log('');
+  }
+  console.log(`  ${DIM}Local files:${RESET}      ${CYAN}migration/data/migration-report.{html,docx}${RESET}`);
+  console.log(`  ${DIM}Open file:// URL:${RESET} ${CYAN}file://${htmlPath}${RESET}`);
   console.log('');
 }
 
