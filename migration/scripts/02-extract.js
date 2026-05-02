@@ -1,32 +1,45 @@
 /**
  * @module 02-extract
- * @description Phase 2: Extract all content from Strapi 3 via GraphQL.
+ * @description Phase 2: Extract content from Strapi 3.
  *
- * Pulls every record for all three content types (articles, datasets, apps)
- * using paginated GraphQL queries, saves them as local JSON files, and
- * verifies record counts against Strapi 3 REST count endpoints.
+ * Iterates the manifest's active content types and pulls every record:
  *
- * After this script runs, all Strapi 3 data exists locally and
- * the Strapi 3 instance is no longer needed for subsequent phases.
+ *   - **GraphQL primary path** for most types: paginated query via the generic
+ *     query-builder (lib/query-builder.js).
+ *
+ *   - **SQLite supplemental path** for types with drafts (publication, meeting,
+ *     post, job): GraphQL filters out NULL `published_at` for unauthenticated
+ *     callers, so we read draft rows directly from the in-repo SQLite snapshot
+ *     and merge them with the GraphQL results.
+ *
+ *   - **SQLite-only path** for `form` (205 records): the Form GraphQL endpoint
+ *     returns 403 unauthenticated, so we read it from SQLite. The opaque `form`
+ *     JSON column is preserved verbatim.
+ *
+ *   - **Singleton path** for `home`: single GraphQL fetch, no pagination.
+ *
+ * Per-type checkpointing: if `migration/data/raw/<plural>.json` already exists
+ * with the expected record count, skip that type. Pass `--force` to override.
  *
  * Outputs:
- * - `migration/data/raw/articles.json` — all articles with full field data
- * - `migration/data/raw/datasets.json` — all datasets with full field data
- * - `migration/data/raw/apps.json` — all apps with full field data
- * - `migration/data/raw/manifest.json` — extraction metadata and counts
+ *   - `migration/data/raw/<plural>.json` — one file per content type
+ *   - `migration/data/raw/manifest.json` — counts, timing, source flags
  *
  * @example
- *   node migration/scripts/02-extract.js
- *
- * Prerequisites:
- * - Strapi 3 running and accessible at the configured URL
- * - Phase 1 complete (introspection data exists)
+ *   pnpm extract                       # all types
+ *   pnpm extract -- --type=publication # one type only
+ *   pnpm extract -- --force            # force re-extract
  */
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
 import { GraphQLClient } from '../lib/graphql-client.js';
+import { buildQuery } from '../lib/query-builder.js';
+import { openSourceDb, readTable, countTable } from '../lib/sqlite-reader.js';
+import { loadConfig } from '../lib/load-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -34,359 +47,319 @@ const ROOT = path.resolve(__dirname, '../..');
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-import { loadConfig } from '../lib/load-config.js';
 const config = await loadConfig();
 
-// ── GraphQL Queries ──────────────────────────────────────────────────
+const argv = process.argv.slice(2);
+const FORCE = argv.includes('--force');
+const TYPE_FILTER = argv.find((a) => a.startsWith('--type='))?.slice('--type='.length);
 
-/**
- * GraphQL query for articles — includes all scalar fields,
- * relation expansions (datasets, apps), and media expansions (mainfile, extrafile).
- */
-const ARTICLE_QUERY = `
-query GetArticles($start: Int!, $limit: Int!) {
-  articles(start: $start, limit: $limit, sort: "createdAt:asc") {
-    id
-    title
-    status
-    slug
-    date
-    external
-    categories
-    tags
-    authors
-    splash
-    thumbnail
-    images
-    abstract
-    markdown
-    mainfiletype
-    funding
-    citation
-    doi
-    hideFromBanner
-    createdAt
-    updatedAt
-    datasets {
-      id
-      title
-      slug
-    }
-    apps {
-      id
-      title
-    }
-    mainfile {
-      id
-      url
-      name
-      mime
-      size
-      ext
-    }
-    extrafile {
-      id
-      url
-      name
-      mime
-      size
-      ext
-    }
+async function loadManifest() {
+  const p = path.resolve(ROOT, config.paths.contentTypesManifest);
+  return JSON.parse(await fs.readFile(p, 'utf8'));
+}
+
+async function loadSourceSchema() {
+  const p = path.resolve(ROOT, config.paths.introspection, 'source-schema.json');
+  if (!existsSync(p)) {
+    throw new Error(`source-schema.json not found at ${p}. Run Phase 1 first: pnpm migrate:phase01`);
   }
-}`;
-
-/**
- * GraphQL query for datasets — includes all fields, datafile media expansion,
- * and relation expansions (apps, articles).
- */
-const DATASET_QUERY = `
-query GetDatasets($start: Int!, $limit: Int!) {
-  datasets(start: $start, limit: $limit, sort: "createdAt:asc") {
-    id
-    title
-    status
-    slug
-    date
-    external
-    categories
-    tags
-    project
-    sources
-    unit
-    timeperiod
-    description
-    notes
-    variables
-    funding
-    citation
-    createdAt
-    updatedAt
-    datafile {
-      id
-      url
-      name
-      mime
-      size
-      ext
-    }
-    apps {
-      id
-      title
-    }
-    articles {
-      id
-      title
-    }
-  }
-}`;
-
-/**
- * GraphQL query for apps — includes all fields and relation expansions
- * (datasets, articles). The `image` field is a string (likely Base64).
- */
-const APP_QUERY = `
-query GetApps($start: Int!, $limit: Int!) {
-  apps(start: $start, limit: $limit, sort: "createdAt:asc") {
-    id
-    title
-    status
-    slug
-    date
-    external
-    categories
-    tags
-    contributors
-    image
-    description
-    url
-    funding
-    citation
-    createdAt
-    updatedAt
-    datasets {
-      id
-      title
-    }
-    articles {
-      id
-      title
-    }
-  }
-}`;
-
-/**
- * Map of content type plural names to their GraphQL queries.
- * @type {Record<string, string>}
- */
-const QUERIES = {
-  articles: ARTICLE_QUERY,
-  datasets: DATASET_QUERY,
-  apps: APP_QUERY,
-};
-
-// ── Extraction Logic ─────────────────────────────────────────────────
-
-/**
- * Extract all records for a content type using paginated GraphQL queries.
- *
- * @param {string} contentType - Plural name of the content type (e.g., "articles")
- * @param {string} query - GraphQL query string with $start and $limit variables
- * @param {GraphQLClient} client - Configured GraphQL client
- * @param {number} limit - Records per page
- * @returns {Promise<Object[]>} All extracted records
- */
-/**
- * Maximum total records to extract per content type.
- * Safety valve against infinite pagination loops or compromised servers.
- * @type {number}
- */
-const MAX_RECORDS = 10000;
-
-async function extractAll(contentType, query, client, limit) {
-  let start = 0;
-  let allRecords = [];
-  let page;
-  let pageNum = 0;
-  const delayMs = config.settings?.requestDelayMs || 0;
-
-  do {
-    pageNum++;
-    page = await client.query(query, { start, limit });
-    const records = page.data[contentType];
-
-    if (!Array.isArray(records)) {
-      throw new Error(`Unexpected response for ${contentType}: expected array, got ${typeof records}`);
-    }
-
-    allRecords = allRecords.concat(records);
-    console.log(`  ${contentType}: page ${pageNum} — ${allRecords.length} records so far`);
-
-    if (allRecords.length >= MAX_RECORDS) {
-      console.warn(`  ${YELLOW}WARNING: Hit safety limit of ${MAX_RECORDS} records for ${contentType}. Stopping.${RESET}`);
-      break;
-    }
-
-    start += limit;
-
-    // Configurable delay between pages to avoid overwhelming the server
-    if (delayMs > 0 && page.data[contentType].length === limit) {
-      await new Promise(r => setTimeout(r, delayMs));
-    }
-  } while (page.data[contentType].length === limit);
-
-  return allRecords;
+  return JSON.parse(await fs.readFile(p, 'utf8'));
 }
 
 /**
- * Query a Strapi 3 REST count endpoint to get the total record count.
- *
- * @param {string} contentType - Plural content type name (e.g., "articles")
- * @returns {Promise<number|null>} Record count, or null if the endpoint is unavailable
+ * Pluralize via manifest queryName, kebab-cased — used for output filenames.
  */
-async function getRestCount(contentType) {
-  const url = `${config.strapi3.apiUrl}/${contentType}/count`;
-  const headers = {};
-  if (config.strapi3.token) {
-    headers['Authorization'] = `Bearer ${config.strapi3.token}`;
+function jsonFileName(manifestEntry) {
+  return manifestEntry.queryName + '.json';
+}
+
+/**
+ * Sleep for `ms` milliseconds.
+ */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Extract via paginated GraphQL.
+ *
+ * @returns {Promise<Object[]>} All records for this type
+ */
+async function extractViaGraphQL(client, manifestEntry, queries) {
+  const limit = config.settings?.paginationLimit || 100;
+  const delay = config.settings?.requestDelayMs || 100;
+  const records = [];
+
+  if (queries.isSingleType) {
+    const json = await client.query(queries.collectionQuery);
+    const record = json.data?.[manifestEntry.queryName];
+    if (record) records.push(record);
+    return records;
   }
 
+  let start = 0;
+  while (true) {
+    const json = await client.query(queries.collectionQuery, { start, limit });
+    const page = json.data?.[manifestEntry.queryName] || [];
+    records.push(...page);
+    if (page.length < limit) break;
+    start += limit;
+    if (delay > 0) await sleep(delay);
+  }
+  return records;
+}
+
+/**
+ * Get the GraphQL count from the connection aggregate.
+ *
+ * @returns {Promise<number|null>} count, or null if no count query (singletons)
+ */
+async function fetchGraphQLCount(client, manifestEntry, queries) {
+  if (!queries.countQuery) return null;
+  const json = await client.query(queries.countQuery);
+  return json.data?.[`${manifestEntry.queryName}Connection`]?.aggregate?.count ?? null;
+}
+
+/**
+ * Read drafts (records with published_at IS NULL) from SQLite for a type
+ * that has draftAndPublish enabled.
+ *
+ * Returns rows in a shape compatible with GraphQL output (id as string, etc.)
+ * to allow merging with GraphQL results.
+ */
+function extractDraftsFromSqlite(db, manifestEntry) {
+  const rows = readTable(db, manifestEntry.sqlTable, {
+    where: 'published_at IS NULL',
+    orderBy: 'id',
+  });
+  // Convert id to string to match GraphQL behavior
+  return rows.map((r) => ({ ...r, id: String(r.id) }));
+}
+
+/**
+ * Read entire content type from SQLite (used for Form, which is 403'd in GraphQL).
+ */
+function extractAllFromSqlite(db, manifestEntry) {
+  const rows = readTable(db, manifestEntry.sqlTable, { orderBy: 'id' });
+  return rows.map((r) => ({ ...r, id: String(r.id) }));
+}
+
+/**
+ * Atomic write: write to .tmp then rename to final path.
+ */
+async function writeJsonAtomic(filePath, data) {
+  const tmp = `${filePath}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2));
+  await fs.rename(tmp, filePath);
+}
+
+/**
+ * Check whether an existing type JSON should be reused.
+ * Returns the parsed records if the file exists with the expected count, else null.
+ */
+async function checkExistingExtract(filePath, expectedCount) {
+  if (FORCE) return null;
+  if (!existsSync(filePath)) return null;
   try {
-    const res = await fetch(url, {
-      headers,
-      signal: AbortSignal.timeout(config.settings?.requestTimeoutMs || 10000),
-    });
-    if (!res.ok) return null;
-    const count = await res.json();
-    return typeof count === 'number' ? count : null;
+    const records = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    if (Array.isArray(records) && records.length === expectedCount) {
+      return records;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-// ── Main ─────────────────────────────────────────────────────────────
-
 async function main() {
-  console.log('=== Phase 2: Data Extraction ===\n');
+  console.log(`${BOLD}── Phase 2: Extract content from Strapi 3 ──${RESET}\n`);
 
-  // Show config
-  console.log('Configuration:');
-  console.log(`  Strapi 3 GraphQL: ${config.strapi3.graphqlUrl}`);
-  console.log(`  Strapi 3 API:     ${config.strapi3.apiUrl}`);
-  console.log(`  Strapi 3 token:   ${config.strapi3.token ? '(set)' : '(not set)'}`);
-  console.log(`  Output dir:       ${config.paths.rawData}`);
-  console.log(`  Pagination limit: ${config.settings?.paginationLimit || 100}`);
-  console.log('');
+  // Load manifest + normalized source schema (built by Phase 1)
+  const manifest = await loadManifest();
+  const sourceSchema = await loadSourceSchema();
 
-  // Verify Strapi 3 is reachable
-  console.log('Checking Strapi 3 connectivity...');
-  const client = new GraphQLClient(config.strapi3.graphqlUrl, {
-    token: config.strapi3.token,
-    timeoutMs: config.settings?.requestTimeoutMs || 30000,
-  });
-
-  try {
-    await client.query('{ __typename }');
-    console.log(`  ${GREEN}✓ Strapi 3 GraphQL is reachable${RESET}\n`);
-  } catch (err) {
-    console.error(`\n${RED}ERROR: Cannot connect to Strapi 3 at ${config.strapi3.graphqlUrl}${RESET}`);
-    console.error(`${RED}${err.message}${RESET}`);
-    console.error(`\n${RED}Phase 2 requires a running Strapi 3 instance. Check the URL in config.js.${RESET}`);
-    process.exit(1);
-  }
-
-  const limit = config.settings?.paginationLimit || 100;
-  const outputDir = path.resolve(ROOT, config.paths.rawData);
-  await fs.mkdir(outputDir, { recursive: true });
-
-  const counts = {};
-  const contentTypes = Object.keys(QUERIES);
-  const allowedStatuses = config.allowedStatuses || null;
-
-  if (allowedStatuses) {
-    console.log(`Status filter: only migrating records with status: ${allowedStatuses.map(s => `"${s}"`).join(', ')}`);
-    console.log(`Records with other statuses (drafts, pending approval) will be skipped.\n`);
-  }
-
-  // Extract each content type
-  for (const ct of contentTypes) {
-    console.log(`Extracting ${ct}...`);
-    try {
-      let records = await extractAll(ct, QUERIES[ct], client, limit);
-      const totalExtracted = records.length;
-
-      // Filter by allowed statuses if configured
-      if (allowedStatuses && allowedStatuses.length > 0) {
-        const before = records.length;
-        records = records.filter((r) => allowedStatuses.includes(r.status));
-        const excluded = before - records.length;
-        if (excluded > 0) {
-          console.log(`  ${YELLOW}Filtered: ${excluded} record(s) excluded (non-${allowedStatuses.join('/')} status)${RESET}`);
-        }
-      }
-
-      counts[ct] = records.length;
-
-      const filePath = path.join(outputDir, `${ct}.json`);
-      await fs.writeFile(filePath, JSON.stringify(records, null, 2));
-      console.log(`  ${GREEN}✓ ${records.length} ${ct} saved to ${path.relative(ROOT, filePath)}${totalExtracted !== records.length ? ` (${totalExtracted} total, ${totalExtracted - records.length} filtered)` : ''}${RESET}\n`);
-    } catch (err) {
-      console.error(`\n${RED}ERROR extracting ${ct}: ${err.message}${RESET}`);
-      console.error(`${RED}Fix the issue and re-run this script. Previously extracted content types are safe.${RESET}`);
+  // Filter to active types, optionally narrowed by --type
+  let activeTypes = manifest.contentTypes.filter((c) => !c.skipDefault);
+  if (TYPE_FILTER) {
+    activeTypes = activeTypes.filter((c) => c.name === TYPE_FILTER);
+    if (activeTypes.length === 0) {
+      console.error(`${RED}ERROR${RESET} no active content type matches --type=${TYPE_FILTER}`);
       process.exit(1);
     }
   }
 
-  // Write manifest
-  const manifest = {
-    extractedAt: new Date().toISOString(),
-    source: config.strapi3.graphqlUrl,
-    counts,
-    paginationLimit: limit,
-    sortOrder: 'createdAt:asc',
-  };
-  const manifestPath = path.join(outputDir, 'manifest.json');
-  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-  console.log(`Manifest saved to ${path.relative(ROOT, manifestPath)}`);
+  // Where extracted JSONs go
+  const rawDir = path.resolve(ROOT, config.paths.rawData);
+  await fs.mkdir(rawDir, { recursive: true });
 
-  // Post-extraction count verification
-  console.log('\nVerifying counts against Strapi 3 REST endpoints...');
-  let allMatch = true;
+  // GraphQL client
+  const gql = new GraphQLClient(config.strapi3.graphqlUrl, {
+    token: config.strapi3.token,
+    timeoutMs: config.settings?.requestTimeoutMs || 30000,
+  });
 
-  for (const ct of contentTypes) {
-    const restCount = await getRestCount(ct);
-    if (restCount === null) {
-      console.log(`  ${YELLOW}⚠ ${ct}: REST count endpoint unavailable — skipped${RESET}`);
-    } else if (allowedStatuses) {
-      // When filtering by status, extracted count will be <= REST total
-      console.log(`  ${GREEN}✓ ${ct}: ${counts[ct]} extracted (${restCount} total in Strapi 3, filtered by status: ${allowedStatuses.join('/')})${RESET}`);
-    } else if (restCount === counts[ct]) {
-      console.log(`  ${GREEN}✓ ${ct}: ${counts[ct]} extracted = ${restCount} in Strapi 3${RESET}`);
-    } else {
-      console.log(`  ${YELLOW}⚠ ${ct}: extracted ${counts[ct]} but REST says ${restCount}${RESET}`);
-      allMatch = false;
+  // SQLite handle (opened lazily, only used for fallback reads)
+  let db = null;
+  const getDb = () => {
+    if (!db) {
+      const dbPath = path.resolve(ROOT, config.strapi3.sqliteDbPath);
+      if (!existsSync(dbPath)) {
+        throw new Error(`Strapi 3 SQLite snapshot not found at ${dbPath}`);
+      }
+      db = openSourceDb(dbPath);
     }
+    return db;
+  };
+
+  console.log(`Configuration:`);
+  console.log(`  Strapi 3 GraphQL: ${CYAN}${config.strapi3.graphqlUrl}${RESET}`);
+  console.log(`  SQLite snapshot:  ${CYAN}${config.strapi3.sqliteDbPath}${RESET}`);
+  console.log(`  Include drafts:   ${config.includeDrafts ? GREEN + 'yes' : DIM + 'no'}${RESET}`);
+  console.log(`  Pagination limit: ${config.settings?.paginationLimit || 100}`);
+  console.log(`  Active types:     ${activeTypes.length}${TYPE_FILTER ? ` (filtered to ${TYPE_FILTER})` : ''}`);
+  console.log('');
+
+  const startedAt = new Date().toISOString();
+  const summary = [];
+
+  for (const ct of activeTypes) {
+    const t0 = Date.now();
+    const filePath = path.join(rawDir, jsonFileName(ct));
+    const isSingle = ct.kind === 'singleType';
+    const useSqliteOnly = ct.name === 'form'; // Form is 403'd in GraphQL
+    const usesGraphQL = !useSqliteOnly;
+
+    // Any draftAndPublish type may have drafts — check via SQLite, not the
+    // hardcoded `hasDrafts` flag (which only reflected counts at audit time).
+    const supportsDrafts = ct.draftAndPublish && config.includeDrafts;
+
+    console.log(`${BOLD}${ct.name.padEnd(16)}${RESET} ${DIM}${isSingle ? 'singleton' : (useSqliteOnly ? 'SQLite-only' : 'GraphQL' + (supportsDrafts ? ' + SQLite drafts' : ''))}${RESET}`);
+
+    let records;
+    let source = useSqliteOnly ? 'sqlite-only' : (supportsDrafts ? 'graphql+sqlite-drafts' : 'graphql');
+
+    // Find query for this type
+    const typeEntry = sourceSchema.contentTypes.find((e) => e.manifest.name === ct.name);
+    if (!typeEntry || !typeEntry.model) {
+      console.log(`  ${RED}skip${RESET}: no source model loaded`);
+      continue;
+    }
+
+    // SQLite is ground truth for record counts. GraphQL may or may not filter
+    // drafts depending on the Strapi 3 endpoint config (agency.icjia-api.cloud
+    // returns drafts, contradicting common Strapi 3 behavior) — the dedup
+    // in the merge step handles either case. Using the SQLite count as
+    // `expected` lets us detect a real mismatch (missing or extra rows).
+    const expectedCount = isSingle ? 1 : countTable(getDb(), ct.sqlTable);
+
+    // Skip if already extracted
+    const existing = await checkExistingExtract(filePath, expectedCount);
+    if (existing) {
+      console.log(`  ${DIM}skip${RESET}: ${existing.length} records already extracted (use --force to re-run)`);
+      summary.push({
+        name: ct.name,
+        count: existing.length,
+        durationMs: 0,
+        source: 'cache',
+        skipped: true,
+      });
+      continue;
+    }
+
+    // Extract
+    try {
+      if (useSqliteOnly) {
+        records = extractAllFromSqlite(getDb(), ct);
+      } else {
+        const queries = buildQuery(typeEntry, sourceSchema);
+        records = await extractViaGraphQL(gql, ct, queries);
+        if (config.includeDrafts && supportsDrafts) {
+          const drafts = extractDraftsFromSqlite(getDb(), ct);
+          // Merge drafts that aren't already in the GraphQL set (by id)
+          const existingIds = new Set(records.map((r) => String(r.id)));
+          const newDrafts = drafts.filter((d) => !existingIds.has(String(d.id)));
+          records.push(...newDrafts);
+          console.log(`  ${DIM}+ ${newDrafts.length} drafts merged from SQLite${RESET}`);
+        }
+      }
+    } catch (err) {
+      console.log(`  ${RED}FAIL${RESET}: ${err.message}`);
+      summary.push({
+        name: ct.name,
+        error: err.message,
+        durationMs: Date.now() - t0,
+        source,
+      });
+      continue;
+    }
+
+    await writeJsonAtomic(filePath, records);
+
+    const ms = Date.now() - t0;
+    const countDelta = expectedCount !== null && records.length !== expectedCount
+      ? ` ${YELLOW}(expected ${expectedCount})${RESET}`
+      : '';
+    console.log(`  ${GREEN}OK${RESET}: ${records.length} records${countDelta}, ${ms}ms → ${path.relative(ROOT, filePath)}`);
+
+    summary.push({
+      name: ct.name,
+      count: records.length,
+      expectedCount,
+      durationMs: ms,
+      source,
+    });
   }
 
-  // Summary
-  console.log('\n--- Summary ---');
-  for (const [ct, count] of Object.entries(counts)) {
-    console.log(`  ${ct}: ${count} records`);
-  }
-  console.log(`  Total: ${Object.values(counts).reduce((a, b) => a + b, 0)} records`);
+  // Write manifest
+  const manifestOut = {
+    generatedAt: startedAt,
+    completedAt: new Date().toISOString(),
+    config: {
+      strapi3GraphqlUrl: config.strapi3.graphqlUrl,
+      includeDrafts: !!config.includeDrafts,
+      paginationLimit: config.settings?.paginationLimit || 100,
+    },
+    types: summary,
+    totals: {
+      types: summary.length,
+      records: summary.reduce((acc, s) => acc + (s.count || 0), 0),
+      failures: summary.filter((s) => s.error).length,
+    },
+  };
+  const manifestPath = path.join(rawDir, 'manifest.json');
+  await writeJsonAtomic(manifestPath, manifestOut);
 
-  if (!allMatch) {
-    console.log(`\n${YELLOW}WARNING: Some counts did not match REST endpoints.${RESET}`);
-    console.log(`${YELLOW}This may be due to draft filtering or records created during extraction.${RESET}`);
-    console.log(`${YELLOW}Review the counts above and re-run if necessary.${RESET}`);
+  // Close SQLite if opened
+  if (db) db.close();
+
+  // Summary output
+  console.log('');
+  console.log(`${BOLD}── Summary ──${RESET}`);
+  console.log(`  Types extracted:   ${manifestOut.totals.types}`);
+  console.log(`  Total records:     ${manifestOut.totals.records}`);
+  console.log(`  Failures:          ${manifestOut.totals.failures}`);
+  console.log(`  Manifest:          ${path.relative(ROOT, manifestPath)}`);
+  console.log('');
+
+  if (manifestOut.totals.failures > 0) {
+    console.log(`${RED}${BOLD}Phase 2 had failures.${RESET} Fix errors above and re-run:`);
+    console.log(`  ${CYAN}pnpm migrate:phase02${RESET}`);
+    console.log('');
+    process.exit(1);
   }
 
-  console.log(`\n${GREEN}Phase 2 extraction complete.${RESET}`);
-  console.log('Next: pnpm migrate:phase02 (or node migration/scripts/02-verify.js)');
+  console.log(`${GREEN}${BOLD}Phase 2 complete.${RESET}`);
+  console.log('');
+  console.log('Next: 02-verify (cross-check counts) → Phase 3 (Media)');
+  console.log(`  ${CYAN}pnpm migrate:phase03${RESET}`);
+  console.log('');
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(`\n${RED}FATAL: ${err.message}${RESET}`);
+  console.error(err.stack);
   process.exit(1);
 });

@@ -1,33 +1,30 @@
 /**
  * @module 02-verify
- * @description Phase 2 verification: validates extracted data integrity.
+ * @description Phase 2 verify: cross-check extracted JSON against SQLite ground truth.
  *
- * Runs independently of the extraction script — useful for re-verifying
- * after Strapi 3 data changes without re-extracting.
+ * For each active content type:
+ *   - Compares extracted JSON record count to the SQLite total (the source of
+ *     truth, since it includes both published and draft rows).
+ *   - Verifies every record has a non-null `id`.
+ *   - Verifies UploadFile references have the required metadata fields
+ *     (`id`, `url`, `hash`, `mime`, `name`).
+ *   - Reports per-type pass/fail.
  *
- * Checks:
- * 1. All 3 raw JSON files exist and parse successfully
- * 2. Manifest exists and counts match actual file record counts
- * 3. Every record has a non-null `id` matching MongoDB ObjectId format
- * 4. Every record has `createdAt` and `updatedAt` (non-null)
- * 5. No duplicate `id` values within any file
- * 6. Article relation arrays (`datasets`, `apps`) are present
- * 7. Article media references (`mainfile`, `extrafile`) are well-formed when present
- * 8. Dataset `datafile` objects are well-formed when present
- * 9. Dataset/app relation arrays are present
- * 10. App `image` field is captured
- * 11. Record counts match Strapi 3 REST count endpoints (if reachable)
+ * Run after `pnpm extract`. Idempotent — read-only.
  *
  * @example
+ *   pnpm migrate:phase02   # runs extract + verify
+ *   # or just verify after a manual extract:
  *   node migration/scripts/02-verify.js
- *
- * Prerequisites:
- * - Phase 2 extraction complete (`migration/data/raw/*.json` files exist)
  */
 
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+import { openSourceDb, countTable } from '../lib/sqlite-reader.js';
+import { loadConfig } from '../lib/load-config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -35,240 +32,187 @@ const ROOT = path.resolve(__dirname, '../..');
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
+const CYAN = '\x1b[36m';
+const DIM = '\x1b[2m';
+const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
-import { loadConfig } from '../lib/load-config.js';
 const config = await loadConfig();
 
-const OBJECT_ID_RE = /^[a-f0-9]{24}$/;
+const REQUIRED_UPLOAD_FILE_FIELDS = ['id', 'url', 'hash', 'mime', 'name'];
 
-/** @type {{name: string, passed: boolean, detail: string}[]} */
-const results = [];
-
-/**
- * Record a check result.
- * @param {string} name - Check name
- * @param {boolean} passed - Whether the check passed
- * @param {string} detail - Description of the result
- */
-function check(name, passed, detail) {
-  results.push({ name, passed, detail });
-  const icon = passed ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
-  console.log(`  ${icon} ${name}: ${detail}`);
+async function loadManifest() {
+  const p = path.resolve(ROOT, config.paths.contentTypesManifest);
+  return JSON.parse(await fs.readFile(p, 'utf8'));
 }
 
 /**
- * Load and parse a JSON file, returning null if it doesn't exist or fails.
- * @param {string} filePath - Absolute path to the JSON file
- * @returns {Promise<any|null>}
+ * Walk a value (recursively) to find UploadFile-shaped objects (have id + url + hash).
+ * Returns counts of well-formed and malformed.
  */
-async function loadJson(filePath) {
-  try {
-    return JSON.parse(await fs.readFile(filePath, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Query a Strapi 3 REST count endpoint.
- * @param {string} contentType - Plural name (e.g., "articles")
- * @returns {Promise<number|null>}
- */
-async function getRestCount(contentType) {
-  const url = `${config.strapi3.apiUrl}/${contentType}/count`;
-  const headers = {};
-  if (config.strapi3.token) {
-    headers['Authorization'] = `Bearer ${config.strapi3.token}`;
-  }
-  try {
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
-    if (!res.ok) return null;
-    const count = await res.json();
-    return typeof count === 'number' ? count : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Validate a media reference object has the required fields.
- * @param {Object} media - The media object from the extracted data
- * @returns {boolean}
- */
-function isValidMediaRef(media) {
-  return media && typeof media.url === 'string' && typeof media.name === 'string' && typeof media.mime === 'string';
+function inspectUploadFiles(value) {
+  const stats = { wellFormed: 0, malformed: [] };
+  const visit = (v, p) => {
+    if (v === null || v === undefined) return;
+    if (Array.isArray(v)) {
+      v.forEach((item, i) => visit(item, [...p, i]));
+      return;
+    }
+    if (typeof v === 'object') {
+      // UploadFile heuristic: has id + url + hash
+      const isUpload = v.id !== undefined && typeof v.url === 'string' && typeof v.hash === 'string';
+      if (isUpload) {
+        const missing = REQUIRED_UPLOAD_FILE_FIELDS.filter((f) => v[f] === undefined || v[f] === null);
+        if (missing.length === 0) stats.wellFormed++;
+        else stats.malformed.push({ path: p.join('.'), missing });
+      }
+      for (const [k, val] of Object.entries(v)) {
+        visit(val, [...p, k]);
+      }
+    }
+  };
+  visit(value, []);
+  return stats;
 }
 
 async function main() {
-  console.log('=== Phase 2: Verification ===\n');
+  console.log(`${BOLD}── Phase 2 verify: cross-check extracted JSON ──${RESET}\n`);
+
+  const manifest = await loadManifest();
+  const activeTypes = manifest.contentTypes.filter((c) => !c.skipDefault);
 
   const rawDir = path.resolve(ROOT, config.paths.rawData);
-
-  // 1. Load files
-  const manifest = await loadJson(path.join(rawDir, 'manifest.json'));
-  const articles = await loadJson(path.join(rawDir, 'articles.json'));
-  const datasets = await loadJson(path.join(rawDir, 'datasets.json'));
-  const apps = await loadJson(path.join(rawDir, 'apps.json'));
-
-  check('manifest.json exists', !!manifest, manifest ? 'loaded' : 'MISSING — run 02-extract.js first');
-  check('articles.json parses', Array.isArray(articles), articles ? `${articles.length} records` : 'MISSING or invalid JSON');
-  check('datasets.json parses', Array.isArray(datasets), datasets ? `${datasets.length} records` : 'MISSING or invalid JSON');
-  check('apps.json parses', Array.isArray(apps), apps ? `${apps.length} records` : 'MISSING or invalid JSON');
-
-  if (!articles || !datasets || !apps || !manifest) {
-    console.log(`\n${RED}Cannot continue — required files are missing.${RESET}`);
+  if (!existsSync(rawDir)) {
+    console.error(`${RED}ERROR${RESET} ${path.relative(ROOT, rawDir)} not found. Run ${CYAN}pnpm extract${RESET} first.`);
     process.exit(1);
   }
 
-  console.log('');
+  const dbPath = path.resolve(ROOT, config.strapi3.sqliteDbPath);
+  const db = openSourceDb(dbPath);
 
-  // 2. Manifest counts match actual
-  const data = { articles, datasets, apps };
-  for (const [ct, records] of Object.entries(data)) {
-    const expected = manifest.counts?.[ct];
-    check(`${ct} manifest count`, expected === records.length,
-      `manifest says ${expected}, file has ${records.length}`);
-  }
+  const results = [];
+  let totalRecords = 0;
+  let totalUploads = 0;
 
-  console.log('');
+  for (const ct of activeTypes) {
+    const fileName = ct.queryName + '.json';
+    const filePath = path.join(rawDir, fileName);
+    const result = { name: ct.name, file: fileName, checks: {} };
 
-  // 3-5. Per-record checks for each content type
-  for (const [ct, records] of Object.entries(data)) {
-    let idsValid = 0;
-    let timestampsValid = 0;
-    const idSet = new Set();
-    let duplicateIds = 0;
+    if (!existsSync(filePath)) {
+      result.checks.fileExists = { pass: false, detail: 'extract JSON not found' };
+      console.log(`  ${RED}✗${RESET} ${ct.name.padEnd(16)} ${RED}NOT EXTRACTED${RESET}`);
+      results.push(result);
+      continue;
+    }
 
-    for (const record of records) {
-      // ID check
-      if (record.id && OBJECT_ID_RE.test(record.id)) {
-        idsValid++;
+    let records;
+    try {
+      const parsed = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      records = Array.isArray(parsed) ? parsed : [parsed];
+    } catch (err) {
+      result.checks.fileExists = { pass: false, detail: `cannot parse JSON: ${err.message}` };
+      console.log(`  ${RED}✗${RESET} ${ct.name.padEnd(16)} ${RED}JSON parse error${RESET}`);
+      results.push(result);
+      continue;
+    }
+
+    result.checks.fileExists = { pass: true };
+
+    const expectedCount = ct.kind === 'singleType' ? 1 : countTable(db, ct.sqlTable);
+    const countPass = records.length === expectedCount;
+    result.checks.recordCount = {
+      pass: countPass,
+      extracted: records.length,
+      sqliteTotal: expectedCount,
+    };
+
+    const missingIds = records.filter((r) => r.id === undefined || r.id === null);
+    result.checks.idCoverage = {
+      pass: missingIds.length === 0,
+      missingCount: missingIds.length,
+    };
+
+    const uploadStats = inspectUploadFiles(records);
+    const uploadPass = uploadStats.malformed.length === 0;
+    result.checks.uploadFiles = {
+      pass: uploadPass,
+      wellFormed: uploadStats.wellFormed,
+      malformedCount: uploadStats.malformed.length,
+      malformedSample: uploadStats.malformed.slice(0, 3),
+    };
+
+    totalRecords += records.length;
+    totalUploads += uploadStats.wellFormed;
+
+    const allPass = countPass && result.checks.idCoverage.pass && uploadPass;
+    const icon = allPass ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
+    const uploadNote = uploadStats.wellFormed > 0 ? `${DIM}, ${uploadStats.wellFormed} UploadFiles${RESET}` : '';
+    const countNote = countPass ? '' : ` ${YELLOW}(SQLite has ${expectedCount})${RESET}`;
+    const idNote = result.checks.idCoverage.pass ? '' : ` ${RED}${missingIds.length} missing id${RESET}`;
+    console.log(`  ${icon} ${ct.name.padEnd(16)} ${records.length.toString().padStart(5)} records${uploadNote}${countNote}${idNote}`);
+
+    if (uploadStats.malformed.length > 0) {
+      console.log(`    ${YELLOW}${uploadStats.malformed.length} malformed UploadFile refs:${RESET}`);
+      for (const m of uploadStats.malformed.slice(0, 3)) {
+        console.log(`      - ${m.path}: missing ${m.missing.join(', ')}`);
       }
-      // Duplicate check
-      if (idSet.has(record.id)) {
-        duplicateIds++;
-      }
-      idSet.add(record.id);
-      // Timestamp check
-      if (record.createdAt && record.updatedAt) {
-        timestampsValid++;
-      }
     }
 
-    check(`${ct} IDs are ObjectIds`, idsValid === records.length,
-      `${idsValid}/${records.length} valid`);
-    check(`${ct} no duplicate IDs`, duplicateIds === 0,
-      duplicateIds === 0 ? 'all unique' : `${duplicateIds} duplicates found`);
-    check(`${ct} timestamps present`, timestampsValid === records.length,
-      `${timestampsValid}/${records.length} have createdAt + updatedAt`);
+    results.push(result);
   }
+
+  db.close();
+
+  const reportPath = path.resolve(ROOT, 'migration/data/extract-verification.json');
+  await fs.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.writeFile(
+    reportPath,
+    JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        totals: { records: totalRecords, uploadFiles: totalUploads, types: results.length },
+        types: results,
+      },
+      null,
+      2,
+    ),
+  );
+
+  const passed = results.filter((r) =>
+    r.checks.fileExists?.pass &&
+    r.checks.recordCount?.pass &&
+    r.checks.idCoverage?.pass &&
+    r.checks.uploadFiles?.pass,
+  ).length;
+  const failed = results.length - passed;
 
   console.log('');
-
-  // 6. Article-specific checks
-  let articlesWithRelations = 0;
-  let articlesWithMainfile = 0;
-  let articlesWithExtrafile = 0;
-  let mainfileValid = 0;
-  let extrafileValid = 0;
-
-  for (const article of articles) {
-    if (Array.isArray(article.datasets) && Array.isArray(article.apps)) {
-      articlesWithRelations++;
-    }
-    if (article.mainfile) {
-      articlesWithMainfile++;
-      if (isValidMediaRef(article.mainfile)) mainfileValid++;
-    }
-    if (article.extrafile) {
-      articlesWithExtrafile++;
-      if (isValidMediaRef(article.extrafile)) extrafileValid++;
-    }
-  }
-
-  check('article relation arrays', articlesWithRelations === articles.length,
-    `${articlesWithRelations}/${articles.length} have datasets[] + apps[]`);
-  check('article mainfile refs', articlesWithMainfile === 0 || mainfileValid === articlesWithMainfile,
-    `${mainfileValid}/${articlesWithMainfile} valid (${articles.length - articlesWithMainfile} null)`);
-  check('article extrafile refs', articlesWithExtrafile === 0 || extrafileValid === articlesWithExtrafile,
-    `${extrafileValid}/${articlesWithExtrafile} valid (${articles.length - articlesWithExtrafile} null)`);
-
-  // 7. Dataset-specific checks
-  let datasetsWithRelations = 0;
-  let datasetsWithDatafile = 0;
-  let datafileValid = 0;
-
-  for (const dataset of datasets) {
-    if (Array.isArray(dataset.apps) && Array.isArray(dataset.articles)) {
-      datasetsWithRelations++;
-    }
-    if (dataset.datafile) {
-      datasetsWithDatafile++;
-      if (isValidMediaRef(dataset.datafile)) datafileValid++;
-    }
-  }
-
-  check('dataset relation arrays', datasetsWithRelations === datasets.length,
-    `${datasetsWithRelations}/${datasets.length} have apps[] + articles[]`);
-  check('dataset datafile refs', datasetsWithDatafile === 0 || datafileValid === datasetsWithDatafile,
-    `${datafileValid}/${datasetsWithDatafile} valid (${datasets.length - datasetsWithDatafile} null)`);
-
-  // 8. App-specific checks
-  let appsWithRelations = 0;
-  let appsWithImage = 0;
-
-  for (const app of apps) {
-    if (Array.isArray(app.datasets) && Array.isArray(app.articles)) {
-      appsWithRelations++;
-    }
-    if (app.image !== null && app.image !== undefined) {
-      appsWithImage++;
-    }
-  }
-
-  check('app relation arrays', appsWithRelations === apps.length,
-    `${appsWithRelations}/${apps.length} have datasets[] + articles[]`);
-  check('app image field captured', true,
-    `${appsWithImage}/${apps.length} have non-null image`);
-
+  console.log(`${BOLD}── Summary ──${RESET}`);
+  console.log(`  Types:          ${results.length}`);
+  console.log(`  Passed:         ${passed}`);
+  console.log(`  Failed:         ${failed}`);
+  console.log(`  Total records:  ${totalRecords}`);
+  console.log(`  UploadFile refs: ${totalUploads}`);
+  console.log(`  Report:         ${path.relative(ROOT, reportPath)}`);
   console.log('');
 
-  // 9. REST count verification
-  const allowedStatuses = config.allowedStatuses || null;
-  console.log('Checking Strapi 3 REST count endpoints...');
-  for (const ct of Object.keys(data)) {
-    const restCount = await getRestCount(ct);
-    if (restCount === null) {
-      check(`${ct} REST count`, true, `${YELLOW}endpoint unavailable — skipped${RESET}`);
-    } else if (allowedStatuses) {
-      // When filtering by status, extracted count will be <= REST total — this is expected
-      check(`${ct} REST count`, data[ct].length <= restCount,
-        `extracted ${data[ct].length} (filtered by status: ${allowedStatuses.join('/')}) from ${restCount} total in Strapi 3`);
-    } else {
-      check(`${ct} REST count`, restCount === data[ct].length,
-        `extracted ${data[ct].length}, REST says ${restCount}`);
-    }
+  if (failed > 0) {
+    console.log(`${RED}${BOLD}Phase 2 verify FAILED.${RESET} Re-run extract for failing types:`);
+    console.log(`  ${CYAN}pnpm extract -- --type=<name> --force${RESET}`);
+    console.log('');
+    process.exit(1);
   }
 
-  // Summary
-  const passed = results.filter(r => r.passed).length;
-  const failed = results.filter(r => !r.passed).length;
-
-  console.log('\n--- Results ---');
-  if (failed === 0) {
-    console.log(`${GREEN}All ${passed} checks passed ✓${RESET}`);
-    console.log(`\nPhase 2 verified. Run Phase 3 next.`);
-  } else {
-    console.log(`${RED}${failed} check(s) failed, ${passed} passed${RESET}`);
-    console.log(`\nReview failures above. Re-run extraction if needed:`);
-    console.log(`  pnpm migrate:phase02 (or node migration/scripts/02-extract.js)`);
-  }
-
-  process.exit(failed === 0 ? 0 : 1);
+  console.log(`${GREEN}${BOLD}Phase 2 verify PASSED.${RESET}`);
+  console.log('');
+  console.log('Next: Phase 3 (Media — download + re-upload UploadFiles)');
+  console.log(`  ${CYAN}pnpm migrate:phase03${RESET}`);
+  console.log('');
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error(`\n${RED}FATAL: ${err.message}${RESET}`);
+  console.error(err.stack);
   process.exit(1);
 });
