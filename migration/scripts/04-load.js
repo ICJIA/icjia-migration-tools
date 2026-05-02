@@ -57,7 +57,16 @@ const argv = process.argv.slice(2);
 const TYPE_FILTER = argv.find((a) => a.startsWith('--type='))?.slice('--type='.length);
 const FORCE = argv.includes('--force');
 
-const SYSTEM_TIMESTAMP_FIELDS = new Set(['created_at', 'updated_at', 'createdAt', 'updatedAt']);
+// Strapi 3 internal fields to strip — Strapi 5 manages these itself
+const STRAPI3_INTERNAL_FIELDS = new Set([
+  'id',                            // saved as legacyId separately
+  'created_at', 'updated_at',      // restored in 04c via direct SQLite UPDATE
+  'createdAt', 'updatedAt',
+  'created_by', 'updated_by',      // Strapi 3 admin user FK — meaningless in S5
+  'createdBy', 'updatedBy',
+  '__v', '_id',                    // MongoDB internals (defensive — ICJIA is SQLite)
+]);
+
 const SELF_REF_DROPS = new Set(['post.posts', 'post.post']);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -97,25 +106,45 @@ function classifyAttributes(model) {
 
 /**
  * Build the POST body for one record.
- * Strips dropped fields, preserves scalars/components/uploads, adds legacyId
- * and publishedAt.
+ *
+ * Allowlist approach: only forward fields that are explicitly known to the
+ * destination schema (scalars, components, or uploads). The Strapi 3 source
+ * sometimes returns extra fields (e.g., `isFeatured` on biography, `site`
+ * on form) that aren't declared in the model — Strapi 5 rejects unknown keys.
+ *
+ * @param {Object} options - { isSingleType: boolean }
  */
-function buildRecordBody(record, ctName, classified) {
+function buildRecordBody(record, ctName, classified, options = {}) {
+  const { isSingleType = false } = options;
   const body = {};
 
   for (const [key, value] of Object.entries(record)) {
-    if (key === 'id') continue;
-    if (SYSTEM_TIMESTAMP_FIELDS.has(key)) continue;
+    if (STRAPI3_INTERNAL_FIELDS.has(key)) continue;
     if (key === 'published_at') continue;
     if (SELF_REF_DROPS.has(`${ctName}.${key}`)) continue;
     if (classified.relations.has(key)) continue;
 
+    // Allowlist: only keep fields the destination schema knows about
+    const isKnown =
+      classified.scalars.has(key) ||
+      classified.components.has(key) ||
+      classified.uploads.has(key);
+    if (!isKnown) continue;
+
+    // Drop nulls — Strapi 5's type validators reject null on typed fields,
+    // even on drafts. Omitting the key lets the field default to whatever
+    // the column allows (null for nullable, default for non-nullable).
+    if (value === null || value === undefined) continue;
+
     body[key] = value;
   }
 
-  const sourceIdNum = parseInt(record.id, 10);
-  if (!Number.isNaN(sourceIdNum)) {
-    body.legacyId = sourceIdNum;
+  // legacyId only on collection types (singletons have no array semantics)
+  if (!isSingleType) {
+    const sourceIdNum = parseInt(record.id, 10);
+    if (!Number.isNaN(sourceIdNum)) {
+      body.legacyId = sourceIdNum;
+    }
   }
 
   // Preserve draft/publish state — null for drafts, ISO string for published
@@ -240,7 +269,9 @@ async function main() {
         continue;
       }
 
-      const body = buildRecordBody(rec, ct.name, classified);
+      const body = buildRecordBody(rec, ct.name, classified, {
+        isSingleType: ct.kind === 'singleType',
+      });
       const isDraft = body.publishedAt === null || body.publishedAt === undefined;
       if (isDraft) stats.drafts++;
 
