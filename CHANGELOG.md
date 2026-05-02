@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.6] - 2026-05-02
+
+### Added
+
+- **`install-strapi5.sh`** — bash script that automates the deterministic
+  parts of the Strapi 5 install:
+  1. Validates Node 22+ and pnpm
+  2. Wipes any existing target directory (with confirmation; `--force` to skip)
+  3. Runs `create-strapi-app` non-interactively with the canonical flags
+     (`--javascript --quickstart --no-run --skip-cloud --skip-db`)
+  4. Sets `PORT` in `.env` (`--port=NNNN` to override)
+  5. Installs `@strapi/plugin-graphql`
+  6. Rebuilds native bindings (`better-sqlite3`, `sharp`) — the step
+     pnpm 10+ blocks by default and the most common first-time error
+  7. Prints clear next-steps for the browser-based admin user + token
+- README "One-time install (automated)" section pointing at the script.
+
+### Changed
+
+- README install procedure now stronger about the
+  `pnpm rebuild better-sqlite3 sharp` step being **mandatory** (not
+  optional). Added explicit error-recovery line: if you see "Could not
+  locate the bindings file" at startup, run `pnpm rebuild` then
+  `pnpm develop` again.
+- Troubleshooting table adds a row for the bindings-file error with the
+  exact fix.
+- Preflight checklist marks the rebuild step as REQUIRED in yellow.
+
 ## [0.7.5] - 2026-05-02
 
 ### Added

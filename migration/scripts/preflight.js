@@ -562,7 +562,7 @@ function printChecklist() {
   console.log(box(`       ${DIM}cd icjia-public-strapi5${RESET}`));
   console.log(box(`       ${DIM}echo "PORT=1337" >> .env${RESET}`));
   console.log(box(`       ${DIM}pnpm add @strapi/plugin-graphql${RESET}      ${DIM}# required for Phase 1c verify${RESET}`));
-  console.log(box(`       ${DIM}pnpm rebuild better-sqlite3 sharp${RESET}    ${DIM}# build native bindings${RESET}`));
+  console.log(box(`       ${DIM}pnpm rebuild better-sqlite3 sharp${RESET}    ${YELLOW}# REQUIRED — pnpm blocks native scripts${RESET}`));
   console.log(box(`       ${DIM}pnpm develop${RESET}                          ${DIM}# launch${RESET}`));
   console.log(box(`     To restart later: ${DIM}cd ../icjia-public-strapi5 && pnpm develop${RESET}`));
   console.log(box(''));

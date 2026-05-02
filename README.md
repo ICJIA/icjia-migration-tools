@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.7.5 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.7.6 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -277,10 +277,43 @@ Edit this file to scope the migration (add types, skip types, change dominance).
 
 The migration tool expects a fresh Strapi 5 install at the path given by `STRAPI5_PROJECT_PATH` (default `../icjia-public-strapi5`). **Install in JavaScript mode**, not TypeScript — the migration tool's generated boilerplate is JS, and a JS Strapi 5 project loads them natively without compilation.
 
-### One-time install (full procedure)
+### One-time install (automated)
+
+The fastest, most reliable path:
 
 ```bash
+cd /Volumes/satechi/webdev/icjia-migration-tools
+./install-strapi5.sh                  # local dev (port 1337)
+./install-strapi5.sh --port=5150      # custom port (e.g., for prod)
+./install-strapi5.sh --target=/path   # custom directory
+./install-strapi5.sh --force          # skip the "wipe existing dir" prompt
+```
+
+The script does everything except the browser-based admin user + API token creation. It:
+
+1. Validates Node 22+ and pnpm
+2. Wipes any existing `icjia-public-strapi5/` directory (with confirmation)
+3. Runs `create-strapi-app@latest` with `--javascript`, `--no-run`, etc.
+4. Sets `PORT` in `.env`
+5. Installs `@strapi/plugin-graphql`
+6. **Rebuilds native bindings** (the step pnpm 10+ blocks by default)
+7. Prints clear next-steps for the manual bits (admin user, token, paste into config.js)
+
+When it finishes, follow the printed next-steps and you're ready to run `pnpm migrate:full`.
+
+### One-time install (manual / verbose)
+
+If you'd rather run each command yourself:
+
+> **Critical:** the steps below must run in this exact order. The
+> `pnpm rebuild` step is **mandatory** — without it, Strapi 5 will fail to
+> start with `Could not locate the bindings file` because pnpm 10+ blocks
+> native build scripts (`better-sqlite3`, `sharp`) by default.
+
+```bash
+# ──────────────────────────────────────────────────────────────────
 # 1. Create the JS Strapi 5 project (sibling directory)
+# ──────────────────────────────────────────────────────────────────
 cd /Volumes/satechi/webdev    # parent of this repo
 npx create-strapi-app@latest icjia-public-strapi5 \
   --quickstart --no-run --skip-cloud --skip-db \
@@ -290,23 +323,37 @@ npx create-strapi-app@latest icjia-public-strapi5 \
 # - Database client → SQLite (default)
 # - Skip admin user creation prompt — we'll create it via the UI
 
-# 2. Configure port (avoid clashing with anything else)
+# ──────────────────────────────────────────────────────────────────
+# 2. Configure port
+# ──────────────────────────────────────────────────────────────────
 cd icjia-public-strapi5
-echo "PORT=1337" >> .env       # or 1338 if 1337 is taken
+echo "PORT=1337" >> .env       # or 5150 for prod (see "Custom port" below)
 
-# 3. Install the GraphQL plugin
-#    The migration tool uses GraphQL for schema verification (Phase 1c) and
-#    for cross-checking the source. Without this plugin, those steps fail.
+# ──────────────────────────────────────────────────────────────────
+# 3. Install GraphQL plugin (required for Phase 1c verification)
+# ──────────────────────────────────────────────────────────────────
 pnpm add @strapi/plugin-graphql
 
-# 4. Approve the native build scripts pnpm blocks by default
-pnpm approve-builds
-# Select all (especially better-sqlite3 and sharp) and confirm
-# OR run directly:
+# ──────────────────────────────────────────────────────────────────
+# 4. Build native bindings (MANDATORY — Strapi will not start without this)
+# ──────────────────────────────────────────────────────────────────
+# pnpm 10+ blocks build scripts by default for security. Strapi needs
+# better-sqlite3 (database driver) and sharp (image processor) to have
+# their native .node binaries built before the server can launch.
 pnpm rebuild better-sqlite3 sharp
 
+# Alternative interactive path (lets you review/approve each script):
+#   pnpm approve-builds
+# (then select better-sqlite3 + sharp + esbuild + @swc/core + core-js-pure
+#  + @apollo/protobufjs and confirm)
+
+# ──────────────────────────────────────────────────────────────────
 # 5. First launch
+# ──────────────────────────────────────────────────────────────────
 pnpm develop
+# Wait for: "Strapi started successfully"
+# If you see "Could not locate the bindings file", step 4 didn't run —
+# Ctrl+C, run `pnpm rebuild better-sqlite3 sharp`, then `pnpm develop` again.
 ```
 
 Then in the browser (auto-opens, or visit `http://localhost:1337/admin`):
@@ -711,6 +758,7 @@ sqlite3 docs/strapi-3-source/data.db "PRAGMA table_info(events_tags__tags_events
 | Phase 5 count check fails | Drafts not migrated, or `publicationState=preview` not set | Confirm `includeDrafts: true` in config and check `?publicationState=preview` is in the S5 query. |
 | Phase 6 ERROR: body URL contains `agency.icjia-api.cloud` | richtext URL rewrite missed a record | Re-run `pnpm fix-image-refs` and the markdown rewriter unit tests. |
 | `pnpm install` fails on `better-sqlite3` | Native build error | Ensure Node 22 (`.nvmrc`), Xcode CLI tools on macOS (`xcode-select --install`). |
+| Strapi 5 fails to start with `Could not locate the bindings file` | pnpm 10+ blocks native build scripts by default; `better-sqlite3.node` was never compiled | `cd <STRAPI5_PROJECT_PATH> && pnpm rebuild better-sqlite3 sharp && pnpm develop`. This is the most common first-time setup error — see the "build native bindings" step in the install procedure. |
 
 For deeper issues, the `audit-report.md` produced by Phase 6 lists every divergence with line-level detail.
 
