@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.7.2 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.7.3 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -334,6 +334,73 @@ pnpm develop
 ```
 
 The plugin is auto-discovered — no config changes needed.
+
+### Production hostname
+
+The production Strapi 5 will be served at **`https://v2.agency.icjia-api.cloud`**. That hostname is already wired into `config.prod.js` (`strapi5.graphqlUrl` and `strapi5.apiUrl`). When you're ready to migrate to prod, just `cp config.prod.js config.js`, set `STRAPI5_TOKEN` for the prod instance, and run the phases.
+
+If you ever change the hostname, edit `config.prod.js`:
+
+```js
+strapi5: {
+  graphqlUrl: 'https://YOUR-NEW-HOSTNAME/graphql',
+  apiUrl: 'https://YOUR-NEW-HOSTNAME',
+  // ...
+}
+```
+
+### Custom port (e.g., if prod already has another Strapi on :1337)
+
+Three places to change. All three must agree.
+
+**ICJIA's chosen prod port is `5150`** (since the prod server already has another Strapi on `:1337`). The migration tool talks to `https://v2.agency.icjia-api.cloud` (port 443/HTTPS); nginx forwards to internal `localhost:5150`. From the tool's perspective the port is invisible.
+
+Examples below use 5150 as the **internal** Strapi 5 port.
+
+**1. Strapi 5's port** — set in the Strapi 5 install's `.env`:
+
+```bash
+# In <STRAPI5_PROJECT_PATH>/.env (e.g., /var/www/icjia-public-strapi5/.env)
+PORT=5150
+```
+
+Restart Strapi 5 for it to pick this up.
+
+**2. Migration tool's URL config** — update one of:
+
+- **Edit `config.prod.js` directly** (preferred for persistent prod config — it's the file you `cp` to `config.js` for prod runs):
+  ```js
+  strapi5: {
+    graphqlUrl: 'https://v2.agency.icjia-api.cloud:5150/graphql',
+    apiUrl: 'https://v2.agency.icjia-api.cloud:5150',
+    // ... or use port 443 + reverse proxy — see option 3 below
+  },
+  ```
+- **Or set environment variables** (per-shell — useful for ad-hoc runs):
+  ```bash
+  export STRAPI5_API_URL="http://localhost:5150"
+  export STRAPI5_GRAPHQL_URL="http://localhost:5150/graphql"
+  pnpm preflight
+  ```
+
+**3. Reverse-proxy (if applicable)** — production typically has nginx or
+similar fronting Strapi 5. Two patterns:
+
+- **Use the public proxy URL** (recommended): point the migration tool at
+  `https://prod-domain.icjia-api.cloud` (port 443/HTTPS) and let the proxy
+  forward to the internal Strapi port. The internal `PORT=1338` is invisible
+  to the migration tool.
+  ```js
+  strapi5: { apiUrl: 'https://v2.agency.icjia-api.cloud', /* ... */ }
+  ```
+- **Bypass the proxy** (less common): point directly at the host:port
+  combination — works only when the migration runs from inside the same
+  network. For ICJIA's prod (port 5150), this might look like
+  `http://internal-ip:5150` from the migration server.
+
+**Quick sanity check** — after changing any of the three, run `pnpm preflight`
+and confirm the "Server reachable" + "API token valid" rows are green. The
+preflight target URL is the one in `config.js` (or the override env var).
 
 ### Choosing JavaScript vs TypeScript
 

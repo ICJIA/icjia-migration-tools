@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-05-02
+
+### Added
+
+- **README "Custom port" section** — explains how to change the Strapi 5
+  port across all three places that must agree (Strapi `.env`, migration
+  tool `config.{js,prod.js}`, and the optional reverse proxy). Example
+  uses ICJIA's chosen prod port 5150.
+- **README "Production hostname" section** — confirms the production URL
+  `https://v2.agency.icjia-api.cloud` and points at the already-wired
+  `config.prod.js` entries.
+
+### Changed
+
+- `config.prod.js`: removed the "TODO placeholder" comment from the prod
+  hostname (`https://v2.agency.icjia-api.cloud` is now confirmed as the
+  prod URL) and added a note that nginx proxies 443 → internal port 5150.
+
 ## [0.7.2] - 2026-05-02
 
 ### Removed (Phase 1.1 cleanup)

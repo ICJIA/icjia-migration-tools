@@ -23,7 +23,9 @@ export default {
   },
 
   strapi5: {
-    // TODO: replace placeholder with the production hostname when provisioned
+    // Production Strapi 5 hostname. Internal Strapi runs on PORT=5150;
+    // nginx proxies https://v2.agency.icjia-api.cloud (443) → localhost:5150.
+    // The migration tool only talks to the public HTTPS URL — no port.
     graphqlUrl: process.env.STRAPI5_GRAPHQL_URL || 'https://v2.agency.icjia-api.cloud/graphql',
     apiUrl: process.env.STRAPI5_API_URL || 'https://v2.agency.icjia-api.cloud',
     token: process.env.STRAPI5_TOKEN || '', // REQUIRED for prod writes — set in env
