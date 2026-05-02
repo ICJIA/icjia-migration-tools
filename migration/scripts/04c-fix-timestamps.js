@@ -149,19 +149,33 @@ async function main() {
       continue;
     }
 
-    // Build a parameterized UPDATE. Use legacy_id (a stable int set on every
-    // row of the document — both the draft row and the published row) instead
-    // of the autoincrement id. The map's `id` field captured the Strapi 5
-    // response from POST, but subsequent PUTs (link-relations + publish)
-    // rewrite rows with new auto-increment ids, leaving the map's id pointing
-    // at a deleted row. legacy_id is stable across all those PUTs and matches
-    // BOTH the draft and published rows in one pass.
-    const setClause = updateCols.map((c) => `${c} = ?`).join(', ');
+    // Build parameterized UPDATEs. Use legacy_id (stable, set on every row of
+    // a document) instead of the autoincrement id (rewritten by PUTs).
+    //
+    // CRITICAL: split into two statements so we don't clobber the draft
+    // marker. created_at / updated_at need to match on BOTH rows (draft +
+    // published). published_at must ONLY be written to the row that already
+    // has a non-NULL value — otherwise we set published_at on the draft row
+    // and Strapi 5 can no longer distinguish draft from published, returning
+    // empty results from /api/<plural>.
+    const nonPublishCols = updateCols.filter((c) => c !== 'published_at');
+    const hasPublishedCol = updateCols.includes('published_at');
     const hasLegacyId = cols.includes('legacy_id');
-    const updateByLegacy = hasLegacyId
-      ? db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE legacy_id = ?`)
+
+    const setClauseNonPub = nonPublishCols.map((c) => `${c} = ?`).join(', ');
+    const updateByLegacy = (hasLegacyId && nonPublishCols.length > 0)
+      ? db.prepare(`UPDATE ${tableName} SET ${setClauseNonPub} WHERE legacy_id = ?`)
       : null;
-    const updateByDocId = db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE document_id = ?`);
+    const updateByDocId = (nonPublishCols.length > 0)
+      ? db.prepare(`UPDATE ${tableName} SET ${setClauseNonPub} WHERE document_id = ?`)
+      : null;
+    // Targeted published_at update: only the row that already has it set.
+    const updatePublishedByLegacy = (hasLegacyId && hasPublishedCol)
+      ? db.prepare(`UPDATE ${tableName} SET published_at = ? WHERE legacy_id = ? AND published_at IS NOT NULL`)
+      : null;
+    const updatePublishedByDocId = hasPublishedCol
+      ? db.prepare(`UPDATE ${tableName} SET published_at = ? WHERE document_id = ? AND published_at IS NOT NULL`)
+      : null;
 
     // Wrap in a transaction for atomicity + speed
     const tx = db.transaction(() => {
@@ -190,25 +204,36 @@ async function main() {
         const publishedAtMs =
           toMs(record.published_at) ??
           (!config.preserveSourceDrafts ? toMs(record.created_at) : null);
-        const params = updateCols.map((c) => {
+        const nonPubParams = nonPublishCols.map((c) => {
           if (c === 'created_at') return toMs(record.created_at);
           if (c === 'updated_at') return toMs(record.updated_at);
-          if (c === 'published_at') return publishedAtMs;
           return null;
         });
 
         // Prefer legacy_id (matches all version rows). Fall back to
         // document_id for singletons or types without legacy_id.
-        let result;
-        if (updateByLegacy && legacyId !== undefined) {
-          result = updateByLegacy.run(...params, legacyId);
-        } else if (docId) {
-          result = updateByDocId.run(...params, docId);
-        } else {
-          missing++;
-          continue;
+        let touched = false;
+        if (nonPublishCols.length > 0) {
+          let result;
+          if (updateByLegacy && legacyId !== undefined) {
+            result = updateByLegacy.run(...nonPubParams, legacyId);
+          } else if (updateByDocId && docId) {
+            result = updateByDocId.run(...nonPubParams, docId);
+          }
+          if (result?.changes > 0) touched = true;
         }
-        if (result.changes > 0) updated++;
+        // Only update published_at on the row that already had it set —
+        // never set it on the draft row (would erase the draft marker).
+        if (hasPublishedCol && publishedAtMs !== null) {
+          let result;
+          if (updatePublishedByLegacy && legacyId !== undefined) {
+            result = updatePublishedByLegacy.run(publishedAtMs, legacyId);
+          } else if (updatePublishedByDocId && docId) {
+            result = updatePublishedByDocId.run(publishedAtMs, docId);
+          }
+          if (result?.changes > 0) touched = true;
+        }
+        if (touched) updated++;
         else missing++;
       }
       return { updated, missing };

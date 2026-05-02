@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6] - 2026-05-02
+
+### Fixed — Phase 4c was clobbering the draft-row marker
+
+`04c-fix-timestamps.js` was running a single UPDATE per record that set
+`published_at` on EVERY row matching `legacy_id` — including the draft
+row, whose `published_at` MUST stay NULL for Strapi 5 to distinguish it
+from the published row.
+
+Symptom: after Phase 4c, every document had two rows with
+`published_at` set, neither row marked as the draft. Strapi 5's content
+manager then refused to return any records (the API returned empty
+results), and the admin UI showed "0 entries found" for every content
+type — even though all 2,491 records were physically present in SQLite.
+
+Fix: split the UPDATE into two statements:
+1. `created_at` and `updated_at` update both rows (matched by legacy_id).
+2. `published_at` updates ONLY the row that already has it set
+   (`WHERE legacy_id = ? AND published_at IS NOT NULL`), preserving the
+   draft row's NULL marker.
+
+If you ran v0.9.5's broken Phase 4c against your data, the fix script
+in `migration/scripts/maintenance/restore-draft-markers.mjs` (added
+this version) restores the canonical state by NULLing `published_at` on
+the lower-id row of every duplicate-published-row pair. Run it once
+with Strapi 5 stopped, then restart.
+
 ## [0.9.5] - 2026-05-02
 
 ### Changed — default flipped to publish-everything
