@@ -46,14 +46,14 @@ function quoteIdent(name) {
   return `"${name}"`;
 }
 
+// Known acceptable failures only matter when those records exist in the
+// source. v0.7.x removes them from the local SQLite snapshot at install
+// time (see install-strapi5.sh option, plus manual cleanup), so this map
+// is empty by default. Keep it as a hook in case future runs encounter
+// records that need to be deliberately skipped.
 const KNOWN_ACCEPTABLE_FAILURES = {
-  // Files Strapi 5's image processor (sharp) rejects for unusual EXIF data.
-  // These are orphans (not referenced by any record), so their absence
-  // doesn't affect the migration.
-  uploadFiles: ['Headshot_Smith_50472f6c9b'],
-  // Records the source has with null required fields (data quality issues
-  // in the original Strapi 3 — empty drafts that were never filled in).
-  records: { grant: ['357'] },
+  uploadFiles: [],
+  records: {},
 };
 
 async function main() {
@@ -315,14 +315,20 @@ async function main() {
         .prepare(`SELECT id, published_at FROM ${quoteIdent(ct.sqlTable)} WHERE published_at IS NOT NULL ORDER BY id LIMIT 5`)
         .all();
       for (const sr of sourceRows) {
-        const s5Row = s5Db
-          .prepare(`SELECT published_at FROM ${quoteIdent(ct.sqlTable)} WHERE legacy_id = ? AND published_at IS NOT NULL LIMIT 1`)
-          .get(sr.id);
-        if (s5Row && sr.published_at) {
+        // Strapi 5 stores 2 rows per document (draft + published). Check
+        // ANY row for the matching legacyId — if either matches the source
+        // published_at within tolerance, count as a match.
+        const s5Rows = s5Db
+          .prepare(`SELECT published_at FROM ${quoteIdent(ct.sqlTable)} WHERE legacy_id = ?`)
+          .all(sr.id);
+        if (sr.published_at && s5Rows.length > 0) {
           sampled++;
           const sourceMs = new Date(sr.published_at).getTime();
-          const s5Ms = new Date(s5Row.published_at).getTime();
-          if (Math.abs(sourceMs - s5Ms) > 1000) mismatched++;
+          const matched = s5Rows.some((r) => {
+            if (!r.published_at) return false;
+            return Math.abs(new Date(r.published_at).getTime() - sourceMs) <= 1000;
+          });
+          if (!matched) mismatched++;
         }
       }
     }

@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.8.0 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.8.1 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -23,8 +23,11 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 - [Architecture overview](#architecture-overview)
 - [Phase pipeline](#phase-pipeline)
 - [Configuration](#configuration)
+- [Strapi 5 setup](#strapi-5-setup)
 - [Running the migration](#running-the-migration)
+- [Incremental updates after the first migration](#incremental-updates-after-the-first-migration)
 - [Verification &amp; validation](#verification--validation)
+- [Deploying to production](#deploying-to-production)
 - [Repository layout](#repository-layout)
 - [Source data reference](#source-data-reference)
 - [Troubleshooting](#troubleshooting)
@@ -277,66 +280,6 @@ Edit this file to scope the migration (add types, skip types, change dominance).
 
 The migration tool expects a fresh Strapi 5 install at the path given by `STRAPI5_PROJECT_PATH` (default `../icjia-public-strapi5`). **Install in JavaScript mode**, not TypeScript — the migration tool's generated boilerplate is JS, and a JS Strapi 5 project loads them natively without compilation.
 
-### Incremental updates after the first migration
-
-Once the initial migration is done, you may want to pick up new or modified records from Strapi 3 (during the cutover window, before the public site switches over). Use `update.sh`:
-
-```bash
-# Pick up NEW records only (default — fast, safe)
-./update.sh --target=local
-./update.sh --target=prod
-
-# Also UPDATE records whose source updated_at is newer than last sync
-./update.sh --target=local --update-newer
-
-# Force-update every existing record (heaviest; re-applies all fields)
-./update.sh --target=local --update-existing
-
-# Skip parts:
-./update.sh --target=local --skip-media        # no new media; skip Phase 3
-./update.sh --target=local --skip-timestamps   # don't restart Strapi 5 for SQLite UPDATE
-```
-
-What happens:
-1. Activates `config.<target>.js` (backs up any existing `config.js` to `config.js.backup`)
-2. Verifies Strapi 5 is reachable + the API token is valid; **fails fast if either is missing**
-3. Re-runs Phase 2 extract (idempotent — caches are checked vs SQLite ground-truth)
-4. Re-runs Phase 3 media (idempotent — disk + hash dedup skip already-processed files)
-5. Re-runs Phase 4 load — INSERTs new records, optionally PUTs changed records based on flags
-6. Re-runs Phase 4 link-relations (Strapi 5's `connect` is idempotent; no duplicates)
-7. Optionally restores timestamps (Phase 4c — interactive prompt)
-8. Re-runs validation, audit, and report
-
-**Recommended cutover workflow:**
-- Migration day −7 to −1: `./update.sh --target=prod --update-newer` daily to capture editorial changes
-- Migration day 0 (cutover): one final `./update.sh --target=prod --update-newer`, then flip the frontend
-- After cutover: stop running this — Strapi 5 is the new source of truth
-
-**What `update.sh` does NOT do** (intentional):
-- Delete records from Strapi 5 that were removed from Strapi 3 (no auto-prune)
-- Resolve conflicts when both Strapi 3 and Strapi 5 edited the same record (last write wins, source side)
-
-### Path handling
-
-Both `install-strapi5.sh` and `update.sh` use absolute path resolution from `${BASH_SOURCE[0]}`, so they work from any working directory:
-
-```bash
-# From your home directory:
-~/icjia-migration-tools/install-strapi5.sh
-
-# Via absolute path:
-/var/www/icjia-migration-tools/update.sh --target=prod
-
-# Or `cd` into the repo and run them locally:
-cd /Volumes/satechi/webdev/icjia-migration-tools && ./update.sh --target=local
-```
-
-For prod, point `install-strapi5.sh` at the absolute install location:
-
-```bash
-./install-strapi5.sh --target=/var/www/icjia-public-strapi5 --port=5150
-```
-
 ### One-time install (automated)
 
 The fastest, most reliable path:
@@ -584,6 +527,141 @@ The phase scripts accept a `--type=<name>` filter:
 pnpm migrate:phase02 -- --type=publication
 pnpm migrate:phase04 -- --type=tag
 ```
+
+---
+
+## Incremental updates after the first migration
+
+After the initial migration completes, editorial changes will keep happening in Strapi 3 until the public site cuts over. The migration tool supports incremental sync to keep Strapi 5 caught up. Every phase is **idempotent** — already-migrated records skip via `legacyId` lookup, already-downloaded files skip via filesystem hash, already-uploaded media skip via the hash → S5 ID map.
+
+### Three update modes
+
+| Mode | Flag | What it does | When to use |
+|---|---|---|---|
+| **Insert-only** (default) | _(no flag)_ | New records (legacyId not in S5) get POSTed; existing records skip. Safe and fast. | Regular incremental sync; you only added new content in Strapi 3. |
+| **Update newer** | `--update-newer` | New records POSTed; **existing records PUT** if source `updated_at` is newer than the last sync timestamp. | Cutover-window sync — captures both new content AND edits to existing records since last run. |
+| **Update existing** | `--update-existing` | New records POSTed; **every existing record PUT** unconditionally. Heavy. | One-off forced re-sync — useful if you need to re-apply schema changes or fix a corrupted destination. |
+
+Mode selection is mutually exclusive — pass at most one of `--update-newer` or `--update-existing`.
+
+### How `--update-newer` works
+
+Each per-type ID map (`migration/data/maps/<plural>.json`) stores a `lastSyncedAt` ISO timestamp on every record entry. On `--update-newer` runs, the loader compares the source's `updated_at` against this stored timestamp:
+
+- `source.updated_at > lastSyncedAt` → PUT to Strapi 5 + bump `lastSyncedAt`
+- `source.updated_at <= lastSyncedAt` → skip (nothing changed since last sync)
+
+The first run after upgrading to v0.8.0 will treat every record as "newer" (since `lastSyncedAt` was empty). After that first sync, only genuine edits trigger a PUT.
+
+The PUT goes to `/api/<plural>/<documentId>` — Strapi 5's `documentId` for the existing record is read from the same map, so we never re-resolve by `legacyId` on every run.
+
+### Running it via `update.sh` (recommended)
+
+```bash
+# 1. Pick a target
+./update.sh --target=local              # talks to config.dev.js's Strapi 5
+./update.sh --target=prod               # talks to config.prod.js's Strapi 5
+
+# 2. Add update mode if you want changes from Strapi 3 to flow through:
+./update.sh --target=prod --update-newer       # safe, recommended
+./update.sh --target=prod --update-existing    # nuclear; rarely needed
+
+# 3. Skip parts of the pipeline if you know they won't change:
+./update.sh --target=local --skip-media        # no new media expected
+./update.sh --target=local --skip-timestamps   # don't bother re-applying source timestamps
+
+# Combine flags freely:
+./update.sh --target=prod --update-newer --skip-timestamps
+```
+
+What `update.sh` does step-by-step:
+1. **Activates `config.<target>.js`** — copies it to `config.js` (which is what every phase script reads). Any pre-existing `config.js` is backed up to `config.js.backup` first.
+2. **Validates the destination** — for `--target=local`, checks `<strapi5ProjectPath>` exists on disk; for both, runs `pnpm preflight` and **fails fast** with a specific fix hint if Strapi 5 isn't reachable or the API token isn't Full Access.
+3. **Phase 2 (extract)** — pulls fresh data from Strapi 3 GraphQL with `--force` so cached extracts are refreshed.
+4. **Phase 3 (media)** — collects → downloads → uploads → rewrites. Files on disk skip download; files in the upload map skip re-upload; if your `--skip-media` flag is set, the whole phase is bypassed.
+5. **Phase 4 step 1 (load)** — applies whichever update mode you picked.
+6. **Phase 4 step 2 (link-relations)** — Strapi 5's `connect` syntax is idempotent; reconnecting an existing relation is a no-op.
+7. **Phase 4 step 3 (timestamps)** — interactive prompt: "Type yes once Strapi 5 is stopped." This step needs exclusive write access to Strapi 5's SQLite. Skip with `--skip-timestamps` if you're OK with migration-time stamps for newly-loaded records.
+8. **Phases 5–7** — re-runs validation, audit, and report so you have fresh artifacts.
+
+### Running individual phases manually
+
+If you want finer control, the underlying load script accepts the same flags:
+
+```bash
+# Update only one type, only modified records
+node migration/scripts/04-load.js --type=post --update-newer
+
+# Force-update one specific type (e.g., re-apply a schema change)
+node migration/scripts/04-load.js --type=biography --update-existing
+
+# Surgical fix — re-apply one type's body URL rewrites
+node migration/scripts/04-load.js --type=page --update-existing
+```
+
+`--type` and update-mode flags compose freely. `--update-existing` without `--type` will PUT every record across every collection type, which can take a while — narrow it with `--type` whenever possible.
+
+### Choosing between `--update-newer` and `--update-existing`
+
+| Scenario | Flag |
+|---|---|
+| Cutover window — pick up editorial changes daily | `--update-newer` |
+| You changed the body URL rewriter and want it re-applied to all records | `--update-existing --type=<type>` per affected type |
+| You changed `content-types.json` dominance for a relation and want the new field shape pushed | `--update-existing --type=<type>` for the dominant side |
+| Strapi 5 destination got corrupted, partial wipe — re-load only what's missing | _(no flag — default insert-only resumes via `legacyId`)_ |
+| You added a brand-new content type to the manifest after the first migration | _(no flag — only that type's records are new, so insert-only handles it)_ |
+
+### Recommended cutover playbook
+
+| When | Command | Why |
+|---|---|---|
+| Cutover day −7 to −1 | `./update.sh --target=prod --update-newer` daily | Capture editorial changes as they happen; keeps the diff window small. |
+| Cutover day 0 (final sync, before flipping the frontend) | `./update.sh --target=prod --update-newer` | One last sync immediately before the public site switches. |
+| Cutover day 0 (after flipping) | _(stop running update.sh)_ | Strapi 5 is now the source of truth. Continued Strapi 3 edits are effectively orphaned. |
+| Post-cutover | _(retire Strapi 3 after a holdout period)_ | Keep Strapi 3 read-only and reachable for a few weeks in case rollback is needed. |
+
+You can automate the daily cutover-week sync as a cron job on the prod server:
+
+```cron
+# /etc/cron.d/icjia-migration-sync (cutover week only)
+0 2 * * * www-data cd /var/www/icjia-migration-tools && ./update.sh --target=prod --update-newer --skip-timestamps >> /var/log/icjia-sync.log 2>&1
+```
+
+`--skip-timestamps` is recommended for cron because Phase 4c is interactive (prompts you to stop Strapi 5). Run a manual `./update.sh --target=prod --update-newer` _without_ `--skip-timestamps` once before cutover so timestamps are applied; daily cron syncs after that point only need fresh content, not perfect ±1s timestamps.
+
+### What `update.sh` does **not** do (by design)
+
+- **Delete records from Strapi 5** that were deleted in Strapi 3. This is intentional — accidental Strapi 3 deletes during the cutover window shouldn't propagate. If you need to prune, do it manually in the Strapi 5 admin.
+- **Resolve concurrent edits** between Strapi 3 and Strapi 5. With `--update-newer`, the source side always wins — any Strapi 5 edits since the last sync get overwritten. During cutover, treat Strapi 5 as read-only to avoid this.
+- **Migrate records previously skipped** (e.g., `grant 357` if you deleted it from the local snapshot due to a data quality issue). The skip is encoded in the local data; remove the skip first if you want them migrated.
+- **Ramp safely against rate limits.** If Strapi 3 rate-limits the GraphQL endpoint, Phase 2 fails. Tune `requestDelayMs` in `config.<target>.js` to throttle.
+
+### Path handling
+
+Both `install-strapi5.sh` and `update.sh` use absolute path resolution from `${BASH_SOURCE[0]}`, so they work from any working directory. Examples:
+
+```bash
+# From your home directory:
+~/icjia-migration-tools/install-strapi5.sh
+
+# Via absolute path (typical on a prod server):
+/var/www/icjia-migration-tools/update.sh --target=prod
+
+# Or cd into the repo and run them locally:
+cd /Volumes/satechi/webdev/icjia-migration-tools
+./update.sh --target=local --update-newer
+```
+
+For prod, point `install-strapi5.sh` at the absolute install location explicitly — the default `--target` is the sibling directory `<repo>/../icjia-public-strapi5`, which is fine for local but probably not for `/var/www`:
+
+```bash
+# Prod-style install
+/var/www/icjia-migration-tools/install-strapi5.sh \
+  --target=/var/www/icjia-public-strapi5 \
+  --port=5150
+```
+
+`update.sh` reads `strapi5ProjectPath` from the activated config, so you don't pass it on the command line — set it once in `config.prod.js` and it's used by every subsequent `update.sh --target=prod` invocation.
 
 ---
 

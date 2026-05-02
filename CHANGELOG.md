@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-05-02
+
+### Documentation
+
+- README: promoted the **Incremental updates after the first migration**
+  section to its own H2 (was previously buried inside "Strapi 5 setup").
+  Now sits between "Running the migration" and "Verification & validation"
+  and is linked from the table of contents.
+- README: expanded incremental-updates docs as the primary dev reference:
+  - Three update modes table (insert-only / update-newer / update-existing)
+    with explicit "when to use" guidance for each.
+  - "Choosing between `--update-newer` and `--update-existing`" decision
+    table covering common operational scenarios.
+  - Explanation of the `lastSyncedAt` mechanism and how the loader uses
+    it to decide PUT vs skip.
+  - Detailed step-by-step walkthrough of what `update.sh` does internally.
+  - Cron snippet for daily cutover-week sync (with `--skip-timestamps`
+    rationale for non-interactive automation).
+  - Documented combinations of flags (e.g. `--type=post --update-newer`
+    for surgical re-syncs).
+- README: added **Strapi 5 setup**, **Incremental updates**, and
+  **Deploying to production** to the table of contents (previously
+  missing).
+
 ## [0.8.0] - 2026-05-02
 
 ### Added — incremental updates
