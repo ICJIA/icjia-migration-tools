@@ -1,12 +1,14 @@
 # ICJIA Public Website CMS Migration (Strapi 3 → Strapi 5)
 
+![ICJIA Public Website CMS Migration](docs/og-image.png)
+
 API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api.cloud`) from Strapi 3 (SQLite) to Strapi 5 (SQLite). Reads content from a Strapi 3 GraphQL endpoint (with direct SQLite fallback for drafts and access-restricted types), transforms and re-uploads media, then loads everything into a Strapi 5 instance with relation linking, timestamp preservation, and field-by-field parity verification.
 
 **Project:** ICJIA Public Website CMS Migration
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.7.0 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.7.1 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 

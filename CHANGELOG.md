@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-05-02
+
+### Added
+
+- `docs/og-image.svg` and `docs/og-image.png` — social-card-style header image
+  matching the sibling tool's design (1200×630). PNG rendered with rsvg-convert.
+  Embedded at the top of README.
+
 ## [0.7.0] - 2026-05-02
 
 End-to-end migration verified against the live ICJIA Strapi 3 source

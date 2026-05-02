@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#4a90d9"/>
+      <stop offset="50%" style="stop-color:#50b87a"/>
+      <stop offset="100%" style="stop-color:#e8a838"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#4a90d9"/>
+      <stop offset="100%" style="stop-color:#50b87a"/>
+    </linearGradient>
+    <pattern id="dots" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#ffffff"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Accent line top -->
+  <rect x="0" y="0" width="1200" height="4" fill="url(#accent)"/>
+
+  <!-- Grid dots (subtle) -->
+  <rect width="1200" height="630" fill="url(#dots)" opacity="0.05"/>
+
+  <!-- ICJIA badge -->
+  <rect x="60" y="50" width="90" height="32" rx="6" fill="#21262d" stroke="#30363d" stroke-width="1"/>
+  <text x="105" y="71" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">ICJIA</text>
+
+  <!-- Title -->
+  <text x="60" y="145" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="700" fill="#e6edf3">Public Website</text>
+  <text x="60" y="205" font-family="system-ui, -apple-system, sans-serif" font-size="52" font-weight="700" fill="#e6edf3">CMS Migration</text>
+
+  <!-- Strapi 3 → Strapi 5 -->
+  <g transform="translate(60, 240)">
+    <rect x="0" y="0" width="160" height="48" rx="8" fill="#1a2332" stroke="#4a90d9" stroke-width="2"/>
+    <text x="80" y="30" font-family="ui-monospace, monospace" font-size="18" font-weight="600" fill="#4a90d9" text-anchor="middle">Strapi 3</text>
+
+    <!-- Arrow -->
+    <line x1="180" y1="24" x2="280" y2="24" stroke="url(#arrow)" stroke-width="3" stroke-linecap="round"/>
+    <polygon points="278,16 294,24 278,32" fill="#50b87a"/>
+
+    <rect x="300" y="0" width="160" height="48" rx="8" fill="#1a2e1a" stroke="#50b87a" stroke-width="2"/>
+    <text x="380" y="30" font-family="ui-monospace, monospace" font-size="18" font-weight="600" fill="#50b87a" text-anchor="middle">Strapi 5</text>
+  </g>
+
+  <!-- Description -->
+  <text x="60" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="20" fill="#8b949e">API-to-API transfer · Manifest-driven · UploadFile rebinding</text>
+  <text x="60" y="370" font-family="system-ui, -apple-system, sans-serif" font-size="20" fill="#8b949e">Relation graph linking · Field-by-field parity audit</text>
+
+  <!-- Tech badges -->
+  <g transform="translate(60, 405)">
+    <rect x="0" y="0" width="80" height="30" rx="6" fill="#21262d"/>
+    <text x="40" y="20" font-family="ui-monospace, monospace" font-size="13" fill="#7ee787" text-anchor="middle">SQLite</text>
+
+    <rect x="92" y="0" width="90" height="30" rx="6" fill="#21262d"/>
+    <text x="137" y="20" font-family="ui-monospace, monospace" font-size="13" fill="#79c0ff" text-anchor="middle">GraphQL</text>
+
+    <rect x="194" y="0" width="70" height="30" rx="6" fill="#21262d"/>
+    <text x="229" y="20" font-family="ui-monospace, monospace" font-size="13" fill="#79c0ff" text-anchor="middle">REST</text>
+
+    <rect x="276" y="0" width="90" height="30" rx="6" fill="#21262d"/>
+    <text x="321" y="20" font-family="ui-monospace, monospace" font-size="13" fill="#d2a8ff" text-anchor="middle">Node.js</text>
+
+    <rect x="378" y="0" width="100" height="30" rx="6" fill="#21262d"/>
+    <text x="428" y="20" font-family="ui-monospace, monospace" font-size="13" fill="#d2a8ff" text-anchor="middle">18 types</text>
+
+    <rect x="490" y="0" width="120" height="30" rx="6" fill="#21262d"/>
+    <text x="550" y="20" font-family="ui-monospace, monospace" font-size="13" fill="#7ee787" text-anchor="middle">10 components</text>
+  </g>
+
+  <!-- Phase indicators -->
+  <g transform="translate(60, 480)">
+    <g>
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#4a90d9" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#4a90d9" text-anchor="middle">1</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Schema</text>
+    </g>
+    <line x1="52" y1="22" x2="78" y2="22" stroke="#30363d" stroke-width="2"/>
+    <g transform="translate(86, 0)">
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#4a90d9" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#4a90d9" text-anchor="middle">2</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Extract</text>
+    </g>
+    <line x1="138" y1="22" x2="164" y2="22" stroke="#30363d" stroke-width="2"/>
+    <g transform="translate(172, 0)">
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#e8a838" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#e8a838" text-anchor="middle">3</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Media</text>
+    </g>
+    <line x1="224" y1="22" x2="250" y2="22" stroke="#30363d" stroke-width="2"/>
+    <g transform="translate(258, 0)">
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#e8a838" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#e8a838" text-anchor="middle">4</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Load</text>
+    </g>
+    <line x1="310" y1="22" x2="336" y2="22" stroke="#30363d" stroke-width="2"/>
+    <g transform="translate(344, 0)">
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#50b87a" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#50b87a" text-anchor="middle">5</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Validate</text>
+    </g>
+    <line x1="396" y1="22" x2="422" y2="22" stroke="#30363d" stroke-width="2"/>
+    <g transform="translate(430, 0)">
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#50b87a" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#50b87a" text-anchor="middle">6</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Audit</text>
+    </g>
+    <line x1="482" y1="22" x2="508" y2="22" stroke="#30363d" stroke-width="2"/>
+    <g transform="translate(516, 0)">
+      <rect x="0" y="0" width="44" height="44" rx="22" fill="#50b87a" opacity="0.15"/>
+      <text x="22" y="28" font-family="system-ui, sans-serif" font-size="16" font-weight="700" fill="#50b87a" text-anchor="middle">7</text>
+      <text x="22" y="62" font-family="system-ui, sans-serif" font-size="11" fill="#6e7681" text-anchor="middle">Report</text>
+    </g>
+  </g>
+
+  <!-- Stats on the right -->
+  <g transform="translate(750, 130)">
+    <text x="0" y="0" font-family="ui-monospace, monospace" font-size="64" font-weight="700" fill="#e6edf3">2,491</text>
+    <text x="0" y="30" font-family="system-ui, sans-serif" font-size="16" fill="#6e7681">records migrated</text>
+
+    <text x="0" y="90" font-family="ui-monospace, monospace" font-size="64" font-weight="700" fill="#e6edf3">2,109</text>
+    <text x="0" y="120" font-family="system-ui, sans-serif" font-size="16" fill="#6e7681">media files transferred</text>
+
+    <text x="0" y="180" font-family="ui-monospace, monospace" font-size="64" font-weight="700" fill="#e6edf3">13,355</text>
+    <text x="0" y="210" font-family="system-ui, sans-serif" font-size="16" fill="#6e7681">fields audited</text>
+
+    <text x="0" y="270" font-family="ui-monospace, monospace" font-size="64" font-weight="700" fill="#50b87a">0</text>
+    <text x="0" y="300" font-family="system-ui, sans-serif" font-size="16" fill="#50b87a">errors</text>
+  </g>
+
+  <!-- Accent line bottom -->
+  <rect x="0" y="626" width="1200" height="4" fill="url(#accent)"/>
+</svg>
