@@ -149,9 +149,19 @@ async function main() {
       continue;
     }
 
-    // Build a parameterized UPDATE
+    // Build a parameterized UPDATE. Use legacy_id (a stable int set on every
+    // row of the document — both the draft row and the published row) instead
+    // of the autoincrement id. The map's `id` field captured the Strapi 5
+    // response from POST, but subsequent PUTs (link-relations + publish)
+    // rewrite rows with new auto-increment ids, leaving the map's id pointing
+    // at a deleted row. legacy_id is stable across all those PUTs and matches
+    // BOTH the draft and published rows in one pass.
     const setClause = updateCols.map((c) => `${c} = ?`).join(', ');
-    const updateStmt = db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE id = ?`);
+    const hasLegacyId = cols.includes('legacy_id');
+    const updateByLegacy = hasLegacyId
+      ? db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE legacy_id = ?`)
+      : null;
+    const updateByDocId = db.prepare(`UPDATE ${tableName} SET ${setClause} WHERE document_id = ?`);
 
     // Wrap in a transaction for atomicity + speed
     const tx = db.transaction(() => {
@@ -161,34 +171,38 @@ async function main() {
         const sourceId = String(record.id);
         const mapEntry = map[sourceId];
         const docId = mapEntry?.documentId;
-        // For singletons, the strapi5 row id is typically 1 — but we also have `id` from the load
-        const strapi5Id = mapEntry?.id || (ct.kind === 'singleType' ? 1 : null);
-        if (!docId && !strapi5Id) {
-          missing++;
-          continue;
-        }
+        const legacyId = mapEntry?.legacyId;
 
+        // Source values are ISO 8601 strings (e.g., "2021-05-04T14:40:30.029Z").
+        // Strapi 5 stores timestamps as milliseconds-since-epoch integers, so
+        // convert before UPDATE — otherwise SQLite stores the ISO string and
+        // later reads it as parseInt("2021-...") = 2021 (just the year).
+        const toMs = (v) => {
+          if (!v) return null;
+          if (typeof v === 'number') return v;
+          const ms = new Date(v).getTime();
+          return Number.isFinite(ms) ? ms : null;
+        };
         const params = updateCols.map((c) => {
-          if (c === 'created_at') return record.created_at || null;
-          if (c === 'updated_at') return record.updated_at || null;
-          if (c === 'published_at') return record.published_at || null;
+          if (c === 'created_at') return toMs(record.created_at);
+          if (c === 'updated_at') return toMs(record.updated_at);
+          if (c === 'published_at') return toMs(record.published_at);
           return null;
         });
 
-        // Strapi 5 row id — better-sqlite3 returns a Number for integer PK
-        if (strapi5Id) {
-          updateStmt.run(...params, strapi5Id);
-          updated++;
+        // Prefer legacy_id (matches all version rows). Fall back to
+        // document_id for singletons or types without legacy_id.
+        let result;
+        if (updateByLegacy && legacyId !== undefined) {
+          result = updateByLegacy.run(...params, legacyId);
         } else if (docId) {
-          // Look up by document_id when we don't have the integer id
-          const row = db.prepare(`SELECT id FROM ${tableName} WHERE document_id = ?`).get(docId);
-          if (row) {
-            updateStmt.run(...params, row.id);
-            updated++;
-          } else {
-            missing++;
-          }
+          result = updateByDocId.run(...params, docId);
+        } else {
+          missing++;
+          continue;
         }
+        if (result.changes > 0) updated++;
+        else missing++;
       }
       return { updated, missing };
     });

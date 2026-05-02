@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.3] - 2026-05-02
+
+### Fixed — Phase 4c (timestamp restoration) silently no-op'd
+
+Two bugs in `04c-fix-timestamps.js` made the script report success while
+actually leaving every record's timestamps at the migration time:
+
+1. **Wrong WHERE clause.** The script used `WHERE id = <id from map>`, but
+   the map's `id` field is the autoincrement value Strapi 5 returned at
+   POST time. Strapi 5's PUTs (link-relations + publish) rewrite document
+   rows with new auto-increment ids, leaving the map's id pointing at a
+   row that no longer exists. UPDATE matched nothing → silent no-op even
+   though the script printed "✓ N timestamps fixed".
+
+   Fix: UPDATE WHERE legacy_id = ?. legacy_id is set on every version row
+   of a document (both draft and published), is stable across PUTs, and
+   matches both rows in one statement. Falls back to document_id for
+   singletons or types without legacy_id.
+
+2. **ISO string written into integer column.** Source records carry
+   `created_at` as ISO 8601 strings (`"2021-05-04T14:40:30.029Z"`), but
+   Strapi 5 stores timestamps as milliseconds-since-epoch integers.
+   SQLite has loose typing, so the UPDATE succeeded but the column ended
+   up holding the string; later reads via `datetime(col/1000, 'unixepoch')`
+   parsed it as `parseInt("2021-...") = 2021`, displaying as
+   `1970-01-01 00:00:02`.
+
+   Fix: convert ISO → ms via `new Date(iso).getTime()` before each UPDATE
+   parameter.
+
+After the fix: source `2021-05-04 14:40:30` → Strapi 5 `2021-05-04 14:40:30`
+on both the draft and published rows. Validation check 8 (timestamp
+preservation ±1s) now passes for all sampled records.
+
 ## [0.9.2] - 2026-05-02
 
 ### Fixed — source drafts no longer auto-published in Strapi 5
