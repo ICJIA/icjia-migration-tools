@@ -65,6 +65,11 @@ const STEPS = [
     fixHint: 'Check that all referenced source IDs were loaded. Re-run 04-load for any failed types first.',
   },
   {
+    label: 'Phase 4 step 2.5: Publish (sync draft → published for non-drafts)',
+    script: 'migration/scripts/04b2-publish.js',
+    fixHint: 'Re-run; idempotent. Most likely cause is a Strapi 5 outage mid-run.',
+  },
+  {
     label: 'Phase 4 step 3: Restore timestamps',
     script: 'migration/scripts/04c-fix-timestamps.js',
     requiresStrapi5Stopped: true,

@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-05-02
+
+### Added — fix "Modified" status on migrated records
+
+- **`04b2-publish.js`** — new Phase 4 step that calls
+  `POST /api/<plural>/<documentId>/actions/publish` for every loaded record
+  whose source had `published_at` set. Records whose source was a draft
+  (`published_at IS NULL`) are skipped — they remain as drafts in Strapi 5.
+- **Why it exists:** Strapi 5 stores `draftAndPublish` content types as two
+  database rows per document (one draft, one published). PUT to the
+  documentId updates the draft row only. Phase 4b (link-relations) PUTs
+  every record to attach m2m/m2o relations, leaving the draft "ahead" of
+  the published row — the admin UI then shows status "Modified" until an
+  editor manually re-publishes each one. This step closes that loop
+  automatically by syncing draft → published after relations are linked.
+- Wired into `04-run-phase.js` between link-relations (step 2) and
+  fix-timestamps (step 3) as **step 2.5**.
+- Wired into `update.sh` between link-relations and timestamps. Incremental
+  syncs that touch existing records via `--update-newer` /
+  `--update-existing` will re-publish them automatically.
+- New script alias: `pnpm publish-all`. Idempotent — safe to re-run any
+  time. Use this to fix existing migrations that show "Modified" without
+  re-running the full pipeline.
+- Type filter: `node migration/scripts/04b2-publish.js --type=biography`
+  for surgical re-publishes.
+- Documented in README troubleshooting table.
+
 ## [0.8.1] - 2026-05-02
 
 ### Documentation

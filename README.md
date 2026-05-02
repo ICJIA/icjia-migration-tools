@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.8.1 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.9.0 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -201,7 +201,7 @@ graph LR
 | 1 — Schema | `pnpm migrate:phase01` | Read `.settings.json` + introspect SQLite, generate Strapi 5 content types + components, copy to S5 project, verify |
 | 2 — Extract | `pnpm migrate:phase02` | Pull all records via GraphQL (or SQLite for drafts/Form) into JSON files in `migration/data/raw/` |
 | 3 — Media | `pnpm migrate:phase03` | Download UploadFiles from `agency.icjia-api.cloud/uploads/`, re-upload via S5 `/api/upload`, rewrite richtext body URLs |
-| 4 — Load | `pnpm migrate:phase04` | POST records to S5, link m2m relations (n-pass dominant-side), restore timestamps |
+| 4 — Load | `pnpm migrate:phase04` | POST records to S5, link m2m relations (n-pass dominant-side), publish non-drafts, restore timestamps |
 | 5 — Validate | `pnpm migrate:phase05` | 10 automated checks (counts, drafts, media, relations, timestamps, content) |
 | 6 — Audit | `pnpm audit` | Field-by-field parity report (ERROR / EXPECTED / INFO / OK) |
 | 7 — Report | `pnpm report` | HTML + DOCX migration report for stakeholders |
@@ -897,6 +897,7 @@ sqlite3 docs/strapi-3-source/data.db "PRAGMA table_info(events_tags__tags_events
 | Phase 4 fails on a singleton: "404 Not Found" | Single-type endpoint pattern | Singletons use `PUT /api/<singularName>` with no documentId. Ensure `home`'s `kind` is `singleType` in the manifest. |
 | Phase 5 count check fails | Drafts not migrated, or `publicationState=preview` not set | Confirm `includeDrafts: true` in config and check `?publicationState=preview` is in the S5 query. |
 | Phase 6 ERROR: body URL contains `agency.icjia-api.cloud` | richtext URL rewrite missed a record | Re-run `pnpm fix-image-refs` and the markdown rewriter unit tests. |
+| Strapi 5 admin shows "Modified" status on records that should be Published | Phase 4b's PUT to attach relations updates the draft row only, leaving published row stale | Run `pnpm publish-all` (or re-run `pnpm migrate:phase04` to pick up the new 4b2-publish step). Drafts in source remain as drafts in S5. |
 | `pnpm install` fails on `better-sqlite3` | Native build error | Ensure Node 22 (`.nvmrc`), Xcode CLI tools on macOS (`xcode-select --install`). |
 | Strapi 5 fails to start with `Could not locate the bindings file` | pnpm 10+ blocks native build scripts by default; `better-sqlite3.node` was never compiled | `cd <STRAPI5_PROJECT_PATH> && pnpm rebuild better-sqlite3 sharp && pnpm develop`. This is the most common first-time setup error — see the "build native bindings" step in the install procedure. |
 

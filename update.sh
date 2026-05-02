@@ -182,6 +182,12 @@ step "Phase 4 step 2: Link relations (idempotent — Strapi 5 'connect' is no-op
 node migration/scripts/04b-link-relations.js
 ok "Phase 4 link-relations complete"
 
+step "Phase 4 step 2.5: Publish (sync draft → published for non-drafts)"
+echo "  Strapi 5 PUTs only update the draft row, leaving the published row stale ('Modified' state)."
+echo "  This step calls /actions/publish on every doc whose source had published_at set."
+node migration/scripts/04b2-publish.js
+ok "Phase 4 publish complete"
+
 if [ "$SKIP_TIMESTAMPS" -eq 1 ]; then
   step "Phase 4 step 3: ${YELLOW}SKIPPED${RESET} (--skip-timestamps)"
 else
