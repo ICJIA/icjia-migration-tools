@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-05-02
+
+### Changed
+
+- `deploy/nginx-strapi5.conf`: ICJIA-customized
+  - hostname: `v2.hub.icjia-api.cloud` → `v2.agency.icjia-api.cloud`
+  - upstream: `127.0.0.1:1337` → `127.0.0.1:5150` (Strapi 5 internal port,
+    chosen to avoid conflict with the existing :1337 Strapi instance on
+    the prod server)
+  - SSL cert paths updated to match the new hostname
+  - Both the Laravel Forge and standalone variants of the config are
+    updated. All other rules (no dotfile deny, single proxy_pass, no
+    extra closing braces) preserved per the lessons documented in the
+    config comments.
+
 ## [0.7.3] - 2026-05-02
 
 ### Added
