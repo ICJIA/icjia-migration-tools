@@ -332,19 +332,27 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
-# Clear stale Strapi 5 token from config.js
+# Sync config.js with the freshly-installed Strapi 5 (port + token)
 # ─────────────────────────────────────────────────────────────────────
-# The fresh Strapi 5 install starts with an empty admin DB, so any token
-# previously stored in config.js is now invalid. Clear it so the user
-# can paste the new one (either via the prompt below, or `pnpm set-token`).
+# The fresh install starts with an empty admin DB, so the previous
+# strapi5.token is invalid — clear it. It also listens on $PORT (the
+# value passed to --port, default 1340), so rewrite the localhost
+# URLs in config.js's strapi5 block to match. This keeps preflight
+# from failing with "unreachable" when the user previously had a
+# different port configured.
 
 CONFIG_JS="$SCRIPT_DIR/config.js"
 if [ -f "$CONFIG_JS" ]; then
-  step "Clearing stale Strapi 5 token in config.js"
-  # Replace the (process.env.STRAPI5_TOKEN || '<anything>') with empty string.
-  # Uses a perl one-liner for portability (BSD vs GNU sed differs on -i).
+  step "Syncing config.js (port → $PORT, clearing stale token)"
+  # 1. Clear the strapi5 token. Uses perl one-liner (BSD vs GNU sed differs on -i).
   perl -i -pe "s/(process\.env\.STRAPI5_TOKEN \|\| ')[^']*(')/\1\2/g" "$CONFIG_JS"
-  ok "config.js token cleared (line: token: process.env.STRAPI5_TOKEN || '')"
+  ok "config.js token cleared"
+  # 2. Rewrite all http://localhost:<digits> occurrences to use $PORT.
+  #    Only matches localhost URLs — agency.icjia-api.cloud (strapi3) is
+  #    untouched. Affects strapi5.graphqlUrl + strapi5.apiUrl + any other
+  #    localhost references. Idempotent (safe to re-run).
+  perl -i -pe "s|http://localhost:\d+|http://localhost:$PORT|g" "$CONFIG_JS"
+  ok "config.js localhost URLs synced to port $PORT"
 fi
 
 # ─────────────────────────────────────────────────────────────────────

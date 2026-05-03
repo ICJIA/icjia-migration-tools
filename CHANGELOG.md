@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.10] - 2026-05-03
+
+### Changed — install-strapi5.sh now syncs config.js port too
+
+The "Clear stale Strapi 5 token" step in install-strapi5.sh became "Sync
+config.js with the freshly-installed Strapi 5". In addition to clearing
+the token, the script now rewrites every `http://localhost:<digits>`
+URL in config.js to use the actual `$PORT` Strapi 5 was configured for
+(default 1340, or whatever was passed via `--port`).
+
+Without this step, switching ports (e.g., 1337 → 1340) required the
+user to manually update config.js's strapi5 block, otherwise preflight
+would fail with "unreachable (fetch failed)" against the old port.
+config.js is gitignored so the v0.9.9 default-port change didn't
+propagate to existing local copies.
+
+The rewrite only touches `http://localhost:` URLs — strapi3's
+`https://agency.icjia-api.cloud` is unaffected. Idempotent (safe to
+re-run).
+
 ## [0.9.9] - 2026-05-03
 
 ### Changed — default port 1337 → 1340
