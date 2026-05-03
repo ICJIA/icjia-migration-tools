@@ -224,31 +224,14 @@ async function main() {
     await waitForEnter(`${YELLOW}Press Enter when schemas are copied and Strapi 5 is running...${RESET} `);
   } else {
     console.log(`\n${GREEN}✓ Schemas copied to Strapi 5 project.${RESET}\n`);
-
-    // Check if Strapi 5 is already running
-    const running = await isStrapi5Running();
-    if (running) {
-      console.log(`${GREEN}✓ Strapi 5 is already running at ${config.strapi5.apiUrl}${RESET}`);
-      console.log(`${YELLOW}NOTE: You need to restart Strapi 5 to pick up the new schemas.${RESET}`);
-      console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && pnpm develop${RESET}`);
-      console.log('');
-      await waitForEnter(`${YELLOW}Press Enter after restarting Strapi 5...${RESET} `);
-    } else {
-      console.log(`Strapi 5 is not running. Start it now:`);
-      console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && pnpm develop${RESET}`);
-      console.log('');
-
-      // Check if GraphQL plugin is installed
-      try {
-        await fs.access(path.resolve(ROOT, config.strapi5ProjectPath, 'node_modules/@strapi/plugin-graphql'));
-      } catch {
-        console.log(`${YELLOW}NOTE: @strapi/plugin-graphql may not be installed. Install it:${RESET}`);
-        console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && pnpm add @strapi/plugin-graphql${RESET}`);
-        console.log('');
-      }
-
-      await waitForEnter(`${YELLOW}Press Enter when Strapi 5 is running (look for "Welcome back!")...${RESET} `);
-    }
+    // Preflight already verified Strapi 5 is reachable. Strapi 5 in dev mode
+    // auto-reloads when files in src/api/ change, so the new content types
+    // and components are picked up automatically — no restart prompt needed.
+    // Step 4 below introspects the running instance to confirm.
+    console.log(
+      `${DIM}Strapi 5 (dev mode) auto-reloads on src/api/ changes — the new schemas are live.${RESET}`,
+    );
+    console.log('');
   }
 
   console.log('');

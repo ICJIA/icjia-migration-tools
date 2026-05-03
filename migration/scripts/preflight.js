@@ -425,12 +425,58 @@ async function checkStrapi5Reachable() {
       guidance: `Start Strapi 5: cd ${CONFIG.strapi5ProjectPath} && pnpm develop`,
     };
   } catch (err) {
+    // Configured URL didn't respond. Before giving up, probe the port from
+    // Strapi 5's .env — if Strapi is running THERE, the user just has a
+    // port mismatch in config.js, and we can tell them exactly what to fix.
+    const envProbe = await probeStrapi5OnEnvPort(url);
+    if (envProbe?.actualPort && envProbe.actualPort !== envProbe.configPort) {
+      return {
+        status: 'FAIL',
+        detail: `Strapi 5 is running on :${envProbe.actualPort} but config.js points to :${envProbe.configPort}`,
+        guidance: `Fix the port mismatch:\n     ` +
+          `(a) Edit config.js → strapi5.apiUrl + graphqlUrl to use port ${envProbe.actualPort}, OR\n     ` +
+          `(b) Edit ${CONFIG.strapi5ProjectPath}/.env → PORT=${envProbe.configPort} and restart Strapi 5\n     ` +
+          `(install-strapi5.sh syncs both automatically.)`,
+      };
+    }
     return {
       status: 'FAIL',
       detail: `${url} unreachable (${err.message})`,
       guidance: `Start Strapi 5: cd ${CONFIG.strapi5ProjectPath} && pnpm develop\n     ` +
-        `Or set STRAPI5_API_URL to a different port (e.g., http://localhost:1339)`,
+        `Or check that nothing else is occupying that port.`,
     };
+  }
+}
+
+// Probe Strapi 5's .env to find the port it WANTS to run on, then HEAD
+// /_health on that port to see if a Strapi is actually there. Used by
+// checkStrapi5Reachable's failure path to give a specific port-mismatch
+// error rather than a generic "unreachable".
+async function probeStrapi5OnEnvPort(configUrl) {
+  try {
+    const projectPath = path.resolve(ROOT, CONFIG.strapi5ProjectPath);
+    const envPath = path.join(projectPath, '.env');
+    if (!existsSync(envPath)) return null;
+
+    const envContent = await fs.readFile(envPath, 'utf8');
+    const m = envContent.match(/^\s*PORT\s*=\s*(\d+)/m);
+    const envPort = m ? m[1] : '1337';
+
+    const u = new URL(configUrl);
+    const configPort = u.port || (u.protocol === 'https:' ? '443' : '80');
+    if (envPort === configPort) return null; // not a mismatch — original error stands
+
+    // Try the .env port
+    const probeUrl = `${u.protocol}//${u.hostname}:${envPort}/_health`;
+    try {
+      const res = await fetch(probeUrl, { method: 'HEAD', signal: AbortSignal.timeout(3000) });
+      if (res.status === 204 || res.status === 200) {
+        return { actualPort: envPort, configPort };
+      }
+    } catch { /* not running on .env port either */ }
+    return null;
+  } catch {
+    return null;
   }
 }
 

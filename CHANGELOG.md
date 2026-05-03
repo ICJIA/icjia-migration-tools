@@ -4,6 +4,48 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.16] - 2026-05-03
+
+### Improved — preflight surfaces port mismatches with a specific message
+
+When `Server reachable` fails because the configured URL doesn't respond,
+preflight now:
+1. Reads `<strapi5ProjectPath>/.env` to find Strapi 5's expected PORT.
+2. HEAD-probes `/_health` on that port.
+3. If Strapi 5 IS running there: FAILs with the exact mismatch message
+   (`Strapi 5 is running on :1340 but config.js points to :1337`) plus
+   both fix options (edit config.js, or edit .env + restart Strapi 5).
+4. If Strapi 5 isn't running on either port: falls through to the
+   generic "Strapi 5 not running" error.
+
+This is the same scenario that confused us repeatedly during this
+session. The dedicated `Port matches Strapi 5 .env` check (added in
+v0.9.13) catches it BEFORE attempting connection; this enhancement adds
+a second layer that catches it even if the .env is missing or the user
+is running Strapi 5 manually on a non-default port.
+
+### Removed — confusing post-copy "Strapi 5 not running" prompt in Phase 1
+
+The Phase 1 orchestrator's `isStrapi5Running()` check (run after schema
+copy, before step 4 verify) was reporting "Strapi 5 is not running" even
+when preflight had just confirmed it WAS reachable. The exact divergence
+was hard to reproduce in isolation — different node-fetch internal state
+between the orchestrator process and the preflight subprocess seemed to
+matter.
+
+Since:
+1. Preflight already verifies Strapi 5 is reachable + token writes.
+2. Strapi 5 in dev mode auto-reloads on `src/api/` changes — no manual
+   restart is needed after Phase 1's schema copy.
+3. Step 4 (`01c-verify-schemas.js`) introspects the running Strapi 5 via
+   GraphQL/REST — if it can't connect, that step fails with a clear,
+   non-confusing error.
+
+…the redundant prompt provided no real safety and confused developers
+with false negatives. Removed entirely. The orchestrator now prints a
+single dim line noting the auto-reload behavior and proceeds straight
+to verify.
+
 ## [0.9.15] - 2026-05-03
 
 ### Fixed — Phase 1 orchestrator's reachability check now agrees with preflight
