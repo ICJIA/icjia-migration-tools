@@ -32,6 +32,10 @@ pnpm-debug.log*
 !.vscode/extensions.json
 .idea/
 
+# Claude Code local session data (settings, plans, history) — per-developer,
+# not for source control
+.claude/
+
 # Environment
 .env
 .env.local
