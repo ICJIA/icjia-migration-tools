@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.15] - 2026-05-03
+
+### Fixed — Phase 1 orchestrator's reachability check now agrees with preflight
+
+`isStrapi5Running()` in `01-run-phase.js` was using GET / with various
+status-code rules; preflight uses HEAD `/_health`. They could disagree
+under different fetch versions, causing the confusing "preflight passed,
+orchestrator says Strapi 5 isn't running" symptom.
+
+Switched the orchestrator to use the **identical** check as preflight:
+HEAD `/_health` → 204 or 200 means reachable. Now there's exactly one
+implementation of "is Strapi 5 reachable", so the two checks can never
+diverge.
+
+### Changed — pnpm everywhere (replaces npm)
+
+Replaced every `npm run develop` / `npm install` / `npm run build` in
+the codebase with the `pnpm` equivalent. Affects:
+- `01-run-phase.js` (5 references in printed guidance + recovery hints)
+- `reset-strapi5.js` + `reset-remote.js`
+- `deploy/restart.sh`
+
+The only remaining `npm` references are `npm install -g pnpm` (the
+legitimate way to install pnpm itself — leave alone).
+
 ## [0.9.14] - 2026-05-03
 
 ### Fixed — exact parity counts everywhere

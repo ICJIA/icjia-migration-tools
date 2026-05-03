@@ -36,10 +36,10 @@ REBUILD=${REBUILD:-N}
 if [[ "$REBUILD" =~ ^[Yy]$ ]]; then
     echo ""
     echo -e "${YELLOW}Installing dependencies...${NC}"
-    npm install
+    pnpm install
     echo ""
     echo -e "${YELLOW}Building Strapi...${NC}"
-    npm run build
+    pnpm build
     echo -e "${GREEN}✓ Build complete${NC}"
 fi
 

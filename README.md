@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.9.14 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.9.15 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 records loaded, 478 relation links created, 2,109 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations) — perfect parity against the Strapi 3 source after pre-cutover data cleanup.
 

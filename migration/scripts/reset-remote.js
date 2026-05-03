@@ -252,7 +252,7 @@ async function main() {
 
   // Build and restart
   console.log('  Building and restarting Strapi 5...');
-  ssh(`cd ${SSH.strapiDir} && npm run build`);
+  ssh(`cd ${SSH.strapiDir} && pnpm build`);
   console.log(`  ${GREEN}✓${RESET} Build complete`);
   ssh('pm2 restart strapi5');
   console.log(`  ${GREEN}✓${RESET} Strapi 5 restarting\n`);

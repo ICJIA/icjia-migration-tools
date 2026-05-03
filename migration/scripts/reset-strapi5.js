@@ -120,7 +120,7 @@ async function main() {
   console.log(`  2. Clean all migration data (migration/data/, migration/output/, field-map.json)`);
   console.log('');
   console.log(`${YELLOW}After reset you will need to:${RESET}`);
-  console.log(`  1. Restart Strapi 5 (npm run develop)`);
+  console.log(`  1. Restart Strapi 5 (pnpm develop)`);
   console.log(`  2. Create a new admin user`);
   console.log(`  3. Create a new Full Access API token`);
   console.log(`  4. Update your token: pnpm set-strapi5`);
@@ -179,7 +179,7 @@ async function main() {
   console.log('Before continuing:');
   console.log('');
   console.log(`  ${CYAN}1.${RESET} Start Strapi 5 (it recreates the DB from existing schema files):`);
-  console.log(`     ${CYAN}cd ${strapi5Dir} && npm run develop${RESET}`);
+  console.log(`     ${CYAN}cd ${strapi5Dir} && pnpm develop${RESET}`);
   console.log('');
   console.log(`  ${CYAN}2.${RESET} Create admin user at ${CYAN}http://localhost:1338/admin${RESET}`);
   console.log('');

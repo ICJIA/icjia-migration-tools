@@ -89,16 +89,17 @@ function waitForEnter(message) {
  * @returns {Promise<boolean>}
  */
 async function isStrapi5Running() {
+  // Identical check to preflight's checkStrapi5Reachable — HEAD /_health
+  // returns 204/200 when Strapi 5 is up. Using the same endpoint guarantees
+  // the orchestrator and preflight never disagree on whether Strapi 5 is
+  // reachable. (The previous GET / approach got tripped up by Strapi 5's
+  // 302 redirect to /admin under various fetch versions.)
   try {
-    // `redirect: 'manual'` + accept any 2xx/3xx/401/403 — Strapi 5 returns 302
-    // (redirect to /admin) for GET /, which fetch otherwise auto-follows. We
-    // just need to know the server is responding, not where it redirects to.
-    const res = await fetch(config.strapi5.apiUrl, {
+    const res = await fetch(`${config.strapi5.apiUrl}/_health`, {
+      method: 'HEAD',
       signal: AbortSignal.timeout(5000),
-      redirect: 'manual',
     });
-    // Anything that came back from the server (any HTTP status) means it's up.
-    return res.status >= 200 && res.status < 500;
+    return res.status === 204 || res.status === 200;
   } catch {
     return false;
   }
@@ -229,12 +230,12 @@ async function main() {
     if (running) {
       console.log(`${GREEN}✓ Strapi 5 is already running at ${config.strapi5.apiUrl}${RESET}`);
       console.log(`${YELLOW}NOTE: You need to restart Strapi 5 to pick up the new schemas.${RESET}`);
-      console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && npm run develop${RESET}`);
+      console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && pnpm develop${RESET}`);
       console.log('');
       await waitForEnter(`${YELLOW}Press Enter after restarting Strapi 5...${RESET} `);
     } else {
       console.log(`Strapi 5 is not running. Start it now:`);
-      console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && npm run develop${RESET}`);
+      console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && pnpm develop${RESET}`);
       console.log('');
 
       // Check if GraphQL plugin is installed
@@ -242,7 +243,7 @@ async function main() {
         await fs.access(path.resolve(ROOT, config.strapi5ProjectPath, 'node_modules/@strapi/plugin-graphql'));
       } catch {
         console.log(`${YELLOW}NOTE: @strapi/plugin-graphql may not be installed. Install it:${RESET}`);
-        console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && npm install @strapi/plugin-graphql${RESET}`);
+        console.log(`  ${CYAN}cd ${path.resolve(ROOT, config.strapi5ProjectPath)} && pnpm add @strapi/plugin-graphql${RESET}`);
         console.log('');
       }
 
@@ -270,8 +271,8 @@ async function main() {
   if (code4 !== 0) {
     printFailure('Step 4 (Verify)', 'migration/scripts/01c-verify-schemas.js', code4,
       'Common causes:\n' +
-      '  - Strapi 5 is not running → npm run develop\n' +
-      '  - @strapi/plugin-graphql not installed → npm install @strapi/plugin-graphql\n' +
+      '  - Strapi 5 is not running → pnpm develop\n' +
+      '  - @strapi/plugin-graphql not installed → pnpm add @strapi/plugin-graphql\n' +
       '  - Schemas not copied → check Step 3 output above\n' +
       '  - Unexpected schema differences → review migration/data/introspection/schema-diff.json');
     process.exit(1);
