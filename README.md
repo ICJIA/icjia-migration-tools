@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.9.16 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.9.18 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 records loaded, 478 relation links created, 2,109 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations) — perfect parity against the Strapi 3 source after pre-cutover data cleanup.
 
@@ -17,6 +17,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 ## Table of Contents
 
 - [Why this exists](#why-this-exists)
+- [Final migration run — postflight summary](#final-migration-run--postflight-summary)
 - [Prerequisites](#prerequisites)
 - [Quick start](#quick-start)
 - [What gets migrated](#what-gets-migrated)
@@ -49,6 +50,90 @@ Strapi 3 has been end-of-life since 2022. The ICJIA public website's CMS needs t
 - The `Home` singleton's nested component structure (Carousel → Slide)
 
 This tool is API-to-API: it reads via GraphQL and direct SQLite, writes via Strapi 5 REST. No raw DB-to-DB copy — that approach can't translate Strapi 3's schema/relation idioms to Strapi 5's `documentId`-based model.
+
+---
+
+## Final migration run — postflight summary
+
+Captured from the most recent end-to-end run (`pnpm migrate:full` followed by `pnpm postflight`). Sign-off ready: every record, every field, every relation, every media file accounted for.
+
+### Pipeline timings
+
+| Stage | Result | Time |
+|---|---|---|
+| preflight | ok | 0.4s |
+| phase01 — schema | ok | 11.9s |
+| phase02 — extract | ok | 20.7s |
+| phase03 — media (download + upload + URL rewrite) | ok | 643.5s |
+| phase04 — load + link relations + restore timestamps | ok | 896.0s |
+| phase05 — validate | ok | 0.2s |
+| phase06 — audit | ok | 0.2s |
+| phase07 — report | ok | 0.1s |
+| postflight | ok | 1.0s |
+| **Total** | | **26.2 minutes** |
+
+Postflight re-runs preflight + validate + audit + report + source-drafts in 966ms total — sub-second sign-off check on a populated Strapi 5.
+
+### Validation (Phase 5)
+
+**10 of 10 automated checks passed.**
+
+### Parity audit (Phase 6)
+
+| Metric | Value |
+|---|---|
+| Records compared | 2,490 (singleton `Home` audited separately) |
+| Fields compared | 13,355 |
+| Clean records | 2,490 |
+| OK | 13,259 |
+| EXPECTED (acceptable transformations) | 96 |
+| INFO | 0 |
+| **ERROR** | **0** (perfect parity) |
+
+### Source record counts (per type)
+
+| Type | Records | Drafts |
+|---|---|---|
+| publication | 1,139 | 32 |
+| meeting | 283 | 2 |
+| job | 231 | 13 |
+| form | 205 | 0 |
+| post | 190 | 5 |
+| biography | 138 | 0 |
+| grant | 114 | 0 |
+| program | 65 | 0 |
+| page | 38 | 0 |
+| tag | 27 | — |
+| required-form | 21 | 0 |
+| unit | 11 | 0 |
+| policy | 9 | 0 |
+| rule | 7 | 0 |
+| event | 6 | 0 |
+| config | 4 | — |
+| regulation | 2 | 0 |
+| home (singleton) | 1 | — |
+| **Total content records** | **2,491** | **52** |
+| upload_file | 2,109 | — |
+
+### Reports produced
+
+```
+migration/data/validation-report.json     — machine-readable check results
+migration/data/audit-report.json          — machine-readable parity diffs
+migration/data/audit-report.md            — human-readable parity report
+migration/data/migration-report.html      — open in browser
+migration/data/migration-report.docx      — share with stakeholders
+migration/data/source-drafts.md           — manual draft-restoration checklist
+migration/data/source-drafts.json         — same data, machine-readable
+```
+
+### Next steps
+
+1. Review `migration/data/audit-report.md` with stakeholders.
+2. (Optional — only if you want source drafts to remain drafts in Strapi 5) Use `migration/data/source-drafts.md` as a checklist; flip those records to `Draft` status in the Strapi 5 admin.
+3. Archive the HTML/DOCX reports as cutover documentation.
+4. Cut the frontend over to the new Strapi 5 endpoint.
+5. (Optional) Schedule v1.1 cleanup — see `docs/icjia-public-website-migration-plan.md`.
 
 ---
 
@@ -140,13 +225,13 @@ Sourced from `migration/config/content-types.json` (the central manifest).
 | Job | 231 | 13 | `external` array of components |
 | Form | 205 | 0 | `form` JSON field — preserved verbatim |
 | Post | 190 | 5 | Dominant on 4 relations |
-| Biography | 138 | 28 | `headshot` UploadFile; m2o → unit |
-| Grant | 114 | 9 | Dominant on 4 relations |
+| Biography | 138 | 0 | `headshot` UploadFile; m2o → unit |
+| Grant | 114 | 0 | Dominant on 4 relations |
 | Program | 65 | 0 | Dominant on 2 relations |
-| Page | 38 | 5 | `clickthrough` array of components |
+| Page | 38 | 0 | `clickthrough` array of components |
 | Tag | 27 | — | `draftAndPublish: false` in source |
 | RequiredForm | 21 | 0 | `tags` relation fixed during migration |
-| Unit | 11 | 1 | Dominant on tags |
+| Unit | 11 | 0 | Dominant on tags |
 | Policy | 9 | 0 | `tags` relation fixed during migration |
 | Rule | 7 | 0 | citation + citationURL |
 | Event | 6 | 0 | Dominant on 3 relations |
@@ -154,7 +239,7 @@ Sourced from `migration/config/content-types.json` (the central manifest).
 | Regulation | 2 | 0 | url + summary |
 | **Home** (singleType) | 1 | — | Nested ComponentCarousel → ComponentSlide |
 | ~~Build~~ | 0 | — | Skipped in v1 (empty source) |
-| **Total** | **2,491** | **95** | (drafts loaded as Published by default — see [`preserveSourceDrafts`](#strapi-5-setup)) |
+| **Total** | **2,491** | **52** | (drafts loaded as Published by default — see [`preserveSourceDrafts`](#strapi-5-setup)) |
 
 **Plus:**
 - **5** Strapi 5 component types deployed (`carousel`, `slide`, `clickthrough`, `banner`, `external-url`). Source had 10; 5 unused (`button`, `slider-button`, `menu-item`, `countdown`, `add-event`) intentionally dropped — see plan doc.

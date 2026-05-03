@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.18] - 2026-05-03
+
+### Added — final-run postflight summary in README
+
+End-to-end migration completed cleanly. Captured the actual numbers in the
+README so the project doc reflects observed reality rather than projected
+estimates:
+
+- New section **"Final migration run — postflight summary"** near the top:
+  pipeline timings (26.2 min total), validation result (10/10 passed),
+  parity audit breakdown (2,490 records / 13,355 fields / 13,259 OK /
+  96 EXPECTED / **0 ERROR**), per-type source record counts including
+  draft splits, list of reports produced, and next steps for cutover.
+- Phase 3 (media) was the longest stage at 643.5s; Phase 4 (load + link
+  relations + restore timestamps) at 896.0s. Both expected — these are the
+  network-bound and write-heavy phases.
+
+### Fixed — phantom drafts in the per-type table
+
+The "What gets migrated" table showed drafts on Biography (28), Grant (9),
+Page (5), and Unit (1) that don't actually exist in the source. Total was
+"95 drafts" — the real count from postflight is **52** (publication 32,
+meeting 2, job 13, post 5; everything else 0). Corrected to reflect the
+actual SQLite source.
+
+### Other
+
+- Bumped version reference at the top of the README from 0.9.16 to 0.9.18
+  (was stale — last bumped manually before 0.9.17 hotfix).
+- SVG/PNG og-image stats verified against postflight output: 2,491 records,
+  2,109 media files, 13,355 fields, 0 errors — all already correct, no
+  edits needed.
+
+## [0.9.17] - 2026-05-03
+
+### Fixed — DIM ReferenceError in 01-run-phase.js
+
+The v0.9.16 cleanup that replaced the reachability prompt with a single
+"auto-reloads on src/api/ changes" note used `${DIM}...${RESET}` for
+styling, but `DIM` wasn't in this file's color-constant block (only
+GREEN, RED, YELLOW, CYAN, BOLD, RESET were defined). Phase 1 crashed with
+`FATAL: DIM is not defined` immediately after the schema-copy step.
+
+Added `const DIM = '\x1b[2m';` alongside the other color constants in
+`migration/scripts/01-run-phase.js`.
+
 ## [0.9.16] - 2026-05-03
 
 ### Improved — preflight surfaces port mismatches with a specific message
