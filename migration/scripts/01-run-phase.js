@@ -28,6 +28,7 @@ const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
 const CYAN = '\x1b[36m';
 const BOLD = '\x1b[1m';
+const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
 /**
