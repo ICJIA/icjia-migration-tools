@@ -480,7 +480,47 @@ async function checkStrapi5Auth() {
         guidance: `Token may work but probe endpoint isn't reachable. Migration phases may still succeed; watch for 401/403 in Phase 4.`,
       };
     }
-    return { detail: 'API token authenticated successfully' };
+
+    // Read access confirmed — now verify WRITE access. A Read-only token
+    // would have passed the GET above but causes HTTP 405 "Method Not
+    // Allowed" on POST during Phase 4, often after several minutes of work.
+    // POST to /api/upload with no body returns 400 "Files are empty" if the
+    // token has write permission (Strapi reached the upload handler), and
+    // 405 if the token only has read permission.
+    let writeRes;
+    try {
+      writeRes = await fetch(`${apiUrl}/api/upload`, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(10000),
+      });
+    } catch (err) {
+      return {
+        status: 'WARN',
+        detail: `read OK; write probe network error: ${err.message}`,
+        guidance: `Read works. Write may still succeed in Phase 4 — watch for 405.`,
+      };
+    }
+    if (writeRes.status === 405) {
+      return {
+        status: 'FAIL',
+        detail: `token is READ-ONLY (write probe returned HTTP 405)`,
+        guidance: `Strapi 5 admin → Settings → Global Settings → API Tokens\n     ` +
+          `Delete the existing token and create a new one with ${BOLD}Token type: Full access${RESET}.\n     ` +
+          `Then re-run: pnpm set-token`,
+      };
+    }
+    if (writeRes.status === 401 || writeRes.status === 403) {
+      return {
+        status: 'FAIL',
+        detail: `write probe rejected (HTTP ${writeRes.status})`,
+        guidance: `Token authenticates but lacks write permission. Recreate as Full Access.`,
+      };
+    }
+    // 400 "Files are empty" is the expected success response (Strapi reached
+    // the upload handler with no file in the body). Anything in 200-499
+    // range that isn't an auth error means write access works.
+    return { detail: 'API token has read + write access (Full Access)' };
   } catch (err) {
     return {
       status: 'FAIL',

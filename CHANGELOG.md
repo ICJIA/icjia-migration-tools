@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.11] - 2026-05-03
+
+### Added — preflight now write-probes the API token
+
+The `API token valid` preflight check used to do a single GET request,
+so a Read-only token would PASS but then fail every POST during Phase 4
+with HTTP 405. We hit that exact failure mode earlier this session — it
+took ~10 minutes of failed inserts before the symptom was diagnosable.
+
+Preflight now:
+1. GETs `/api/upload/files` (or `/api/users/me`) to confirm authenticate
+   + read access (existing behavior).
+2. POSTs `/api/upload` with no body. A Full-Access token reaches the
+   upload handler and gets HTTP 400 "Files are empty" — that's a PASS.
+   A Read-only token gets HTTP 405 — that's a FAIL with explicit fix
+   instructions ("recreate as Full Access, then `pnpm set-token`").
+
+The new pass message reads "API token has read + write access (Full
+Access)" so the operator knows BOTH gates were verified.
+
 ## [0.9.10] - 2026-05-03
 
 ### Changed — install-strapi5.sh now syncs config.js port too
