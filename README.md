@@ -799,40 +799,126 @@ Two viable paths to get the migrated content onto the production Strapi 5 instan
 
 **Always migrate locally first** — regardless of which cutover path you take. The local migration pass is where you shake out schema bugs, validate counts, audit field-by-field parity, and review the audit-report.md with stakeholders. Don't run any phase against prod until `pnpm postflight` is green locally.
 
+### Topology — what runs where
+
+The split is the part most people get tripped up by. Two machines, two roles:
+
+| Where it runs | What it does | What it stores |
+|---|---|---|
+| **Prod server** (e.g., the Forge box at `v2.agency.icjia-api.cloud`) | Hosts Strapi 5 — the *target* of the migration. Nginx → Node (Strapi) → SQLite. | Strapi 5 install, the live SQLite DB, uploaded media files. **No** migration tool runtime, **no** migration secrets. |
+| **Your local machine** (your Mac) | Runs the migration tool. Reaches the prod Strapi 5 over HTTPS. | The `icjia-migration-tools` repo, `.env` with `STRAPI5_TOKEN` (mode 0600, gitignored), the `migration/data/` working dir. |
+
+The migration tool **never** runs on prod. The token in `.env` always lives on your laptop. The only things that move from your laptop to prod are: HTTPS API calls during migration phases, plus a one-time SCP via `04c-fix-timestamps-remote.js` (which uploads JSON maps to a `mktemp -d` dir on prod, runs a generated SQLite-update script under your SSH session, and cleans up).
+
+### Step 0: Provision Strapi 5 on prod (Laravel Forge example)
+
+This step happens **once**, before any migration. The provided `install-strapi5.sh` automates it. The flow below assumes Forge because that's the documented setup; any environment with Node 22+, pnpm, pm2, and nginx works the same way with minor path differences.
+
+**1. Create the site in Forge.** Forge will create the site root at `~/v2.agency.icjia-api.cloud/` on the server.
+
+**2. SSH in and clone the migration-tools repo into the site root:**
+
+```bash
+ssh forge@v2.agency.icjia-api.cloud
+cd ~/v2.agency.icjia-api.cloud
+git clone https://github.com/ICJIA/icjia-migration-tools.git
+cd icjia-migration-tools
+```
+
+**3. Run the install script.** Pass `--port=5150` to match the port `config.prod.js` expects (the install script's default `1340` is for local dev):
+
+```bash
+./install-strapi5.sh --port=5150
+```
+
+When the script finishes, your layout will be:
+
+```
+~/v2.agency.icjia-api.cloud/                       ← Forge site root
+├── icjia-migration-tools/                          ← cloned (used only for the install)
+│   └── install-strapi5.sh                          ← the script you just ran
+└── icjia-public-strapi5/                           ← created by the install script (= $SCRIPT_DIR/../icjia-public-strapi5)
+    ├── src/, config/, .env, package.json, …       ← Strapi 5 install
+    └── ecosystem.config.cjs                        ← pm2 config (auto-generated)
+```
+
+**Skip the script's token prompt at the end** — press Enter. The token belongs in your *local* `.env`, not on the server. (Pasting it on the server would write to a `.env` that nothing on the server reads.)
+
+**4. Start Strapi 5 under pm2** (the install script generates `ecosystem.config.cjs` but doesn't auto-start):
+
+```bash
+cd ~/v2.agency.icjia-api.cloud/icjia-public-strapi5
+pm2 start ecosystem.config.cjs
+pm2 save                  # persist across reboots
+pm2 startup               # follow the printed sudo command
+```
+
+Verify locally on the server: `curl http://localhost:5150/admin` should return HTML.
+
+**5. Configure nginx via Forge.** In Forge → Site → Edit Files → nginx config, set up an HTTPS proxy to `localhost:5150`. The `deploy/nginx-strapi5.conf` in this repo is a working starting point — paste it, adjust paths/server_name, save. Forge auto-reloads nginx. Then enable Let's Encrypt SSL via Forge's "SSL" tab.
+
+**6. Create the admin user + API token.** Once nginx + SSL are live, browse to `https://v2.agency.icjia-api.cloud/admin` and step through the first-launch flow. Then **Settings → API Tokens → Create new API Token**:
+
+- Name: `migration` (or anything)
+- **Token type: Full access** (NOT Read-only — write phases need it)
+- **Token duration: Unlimited**
+- Save and copy the value (shown once)
+
+**7. Optional cleanup.** You can delete `~/v2.agency.icjia-api.cloud/icjia-migration-tools/` from prod once the install is done — it's not used at runtime. Strapi 5 lives entirely under `~/v2.agency.icjia-api.cloud/icjia-public-strapi5/`.
+
+#### Forge-specific footgun: site root + auto-deploy
+
+Forge's per-site auto-deploy is built around the assumption that the site root *is* the app. With two repos under `~/v2.agency.icjia-api.cloud/` (`icjia-migration-tools/` + `icjia-public-strapi5/`), Forge's deploy script may try to `git pull` from the wrong place or run npm scripts that don't exist. Two ways out:
+
+- **Disable Forge's auto-deploy** for this site (you're managing Strapi 5 manually via pm2 anyway). This is the simplest option, and what the rest of these instructions assume.
+- **Move the tooling repo elsewhere** — clone `icjia-migration-tools` to `~/icjia-migration-tools/` instead, and pass `--target=~/v2.agency.icjia-api.cloud/icjia-public-strapi5` to the install script. The Forge site root then contains only the Strapi 5 install, which is closer to Forge's mental model.
+
+Either works. The first is faster to set up; the second keeps Forge's deploy hook usable for future tooling.
+
+#### Why `install-strapi5.sh` has to run on the server
+
+The script must run on the same machine where Strapi 5 will live. Two `pnpm install` dependencies — `better-sqlite3` and `sharp` — ship architecture-specific `.node` binaries that are built during install. A Mac-arm64 build can't be SCP'd to a Linux x86_64 box and just work. That's why the script has the whole `pnpm.onlyBuiltDependencies` allowlist dance — to make sure native rebuilds actually fire on the target machine, not just on the box that runs the install.
+
 ### Option A: API-to-API to remote prod (recommended)
 
 Re-run the migration phases pointed at the production Strapi 5 instance. Same scripts, same idempotency — only the URLs change.
 
 **Prerequisites:**
-- Production Strapi 5 already deployed and reachable (this tool does not deploy Strapi 5 itself)
-- A Full-Access API token created in production Strapi 5 admin
-- SSH access to the prod server for Phase 4c (timestamp restoration via direct SQLite UPDATE — timestamps can't be set via REST)
-- The same Strapi 5 version + Node version as your local install (so generated schemas behave identically)
+- Production Strapi 5 deployed and reachable per **Step 0** above (the `install-strapi5.sh` flow on the prod server)
+- A Full-Access API token created in production Strapi 5 admin (Step 0.6 above)
+- SSH access from your Mac to the prod server for Phase 4c (timestamp restoration via direct SQLite UPDATE — timestamps can't be set via REST)
+- The same Strapi 5 version + Node version on prod as on your local install (so generated schemas behave identically — `install-strapi5.sh` pins this for you on both ends)
 
-**Procedure:**
+**Procedure** — runs entirely from your local machine:
 
 ```bash
+cd /path/to/icjia-migration-tools
+
 # 1. Activate the production config profile
 cp config.prod.js config.js
 
-# 2. Edit config.prod.js (or set env vars) with the real prod values
-#    - strapi5.graphqlUrl
-#    - strapi5.apiUrl
-#    - SSH details for 04c-fix-timestamps-remote.js
-export STRAPI5_TOKEN="<prod-full-access-token>"
+# 2. Drop the prod Full-access API token into local .env (mode 0600)
+pnpm set-token <paste-prod-full-access-token>
+# (or: pnpm set-token  for an interactive prompt)
 
-# 3. Run preflight against prod to confirm everything is reachable
+# 3. Set SSH env vars for Phase 4c's remote-timestamp step
+#    (no production-IP defaults are baked in — required since v0.10.0)
+export SSH_HOST=v2.agency.icjia-api.cloud
+export SSH_USER=forge
+export SSH_STRAPI_DIR=/home/forge/v2.agency.icjia-api.cloud/icjia-public-strapi5
+
+# 4. Run preflight against prod to confirm everything is reachable + token works
 pnpm preflight
 
-# 4. (Recommended) start with phases 1 + 2 only against prod to validate
+# 5. (Recommended) start with phases 1 + 2 only against prod to validate
 pnpm migrate:phase01    # generates schemas, copies to prod Strapi 5 src/
-pnpm migrate:phase02    # extracts content (read-only on Strapi 3)
+pnpm migrate:phase02    # extracts content from Strapi 3 (read-only)
 
-# 5. Run the rest
+# 6. Run the rest
 pnpm migrate:phase03    # download + upload media (slow — ~30–60 min on WAN)
 pnpm migrate:phase04    # load + link relations + SSH timestamp fix
 
-# 6. Final sign-off
+# 7. Final sign-off
 pnpm postflight         # validate + audit + report against prod
 ```
 
