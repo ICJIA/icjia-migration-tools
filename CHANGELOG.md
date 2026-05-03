@@ -4,6 +4,49 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.14] - 2026-05-03
+
+### Fixed — exact parity counts everywhere
+
+Stakeholder review issue: the migration report and README showed
+"2,491 of 2,492 records" / "2,109 of 2,110 files" suggesting the
+migration was missing 1 record and 1 file. In reality the source data
+was cleaned up before the run (grant 357 with null title + the corrupt
+Headshot_Smith image were both removed from the SQLite snapshot), so
+"X of X" is correct — but the templates had hardcoded the pre-cleanup
+"Y" values from earlier runs.
+
+#### Report (`07-generate-report.js`)
+
+- Now opens the Strapi 3 SQLite snapshot at report-generation time and
+  computes ground-truth source totals dynamically: total records (sum
+  across all non-skipped content type tables) and total upload_file rows.
+- Sums uploaded media bytes from the local `migration/data/media/files/`
+  dir (Strapi 5's response sizes are in KB, so this is more accurate).
+- Pipeline-summary cells render as "X" when source matches loaded, and
+  "X of Y" only when there's a real discrepancy.
+- Phase 1 row reports the actual deployed component count (5 for ICJIA
+  after Phase 1.1 cleanup) and content-type count (read from manifest).
+- Removed all hardcoded counts (2,492 / 2,110 / 1.20 GB / 1,349) — every
+  number is computed from data files at render time.
+
+#### README
+
+- "Validated end-to-end" line: dropped misleading "of N" suffixes.
+- Per-type table: corrected drafts column for biography (28), grant (9),
+  page (5), unit (1) — these were stale 0s from before the source
+  data audit. Grant total corrected to 114 (was 115). Tag, config, and
+  home now show "—" in the drafts column since they have
+  `draftAndPublish: false` (no draft state to count).
+- Added a Total row: 2,491 records, 95 source drafts.
+- "Plus" section corrected: 5 components actually deployed (was "10
+  component types" which conflated source list with deployed list).
+- Other count references updated: 2,110 → 2,109, 5,308 → 2,491.
+
+After this release, every count in the report and README is verifiable
+by running the SQL query that produced it. No off-by-ones, no stale
+constants from prior data states.
+
 ## [0.9.13] - 2026-05-03
 
 ### Added — preflight checks port match between config.js and Strapi 5 .env

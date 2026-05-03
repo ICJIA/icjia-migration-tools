@@ -8,9 +8,9 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.9.13 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.9.14 — see [CHANGELOG.md](CHANGELOG.md)
 
-**Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
+**Validated end-to-end:** 2,491 records loaded, 478 relation links created, 2,109 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations) — perfect parity against the Strapi 3 source after pre-cutover data cleanup.
 
 ---
 
@@ -40,9 +40,9 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 
 Strapi 3 has been end-of-life since 2022. The ICJIA public website's CMS needs to move to Strapi 5 with no data loss, preserving:
 
-- All 17 modeled content types (~5,308 records, including drafts)
+- All 17 modeled content types (2,491 records, including drafts) plus the `Home` singleton
 - 10 component definitions, including 3 with nested sub-components
-- 2,110 uploaded files (re-hosted, not just URL-rewritten)
+- 2,109 uploaded files (re-hosted, not just URL-rewritten)
 - Relation integrity across ~19 dominant m2m edges
 - Timestamps within ±1 second of the source
 - Embedded richtext URLs rewritten from absolute to relative
@@ -135,29 +135,30 @@ Sourced from `migration/config/content-types.json` (the central manifest).
 
 | Type | Records | Drafts | Notes |
 |---|---|---|---|
-| Publication | 1139 | 32 | `tags` is JSON array (preserved literally) |
+| Publication | 1,139 | 32 | `tags` is JSON array (preserved literally) |
 | Meeting | 283 | 2 | `external` array of components |
 | Job | 231 | 13 | `external` array of components |
 | Form | 205 | 0 | `form` JSON field — preserved verbatim |
 | Post | 190 | 5 | Dominant on 4 relations |
-| Biography | 138 | 0 | `headshot` UploadFile; m2o → unit |
-| Grant | 115 | 0 | Dominant on 4 relations |
+| Biography | 138 | 28 | `headshot` UploadFile; m2o → unit |
+| Grant | 114 | 9 | Dominant on 4 relations |
 | Program | 65 | 0 | Dominant on 2 relations |
-| Page | 38 | 0 | `clickthrough` array of components |
-| Tag | 27 | 0 | Inverse side of all 9 m2m relations |
+| Page | 38 | 5 | `clickthrough` array of components |
+| Tag | 27 | — | `draftAndPublish: false` in source |
 | RequiredForm | 21 | 0 | `tags` relation fixed during migration |
-| Unit | 11 | 0 | Dominant on tags |
+| Unit | 11 | 1 | Dominant on tags |
 | Policy | 9 | 0 | `tags` relation fixed during migration |
 | Rule | 7 | 0 | citation + citationURL |
 | Event | 6 | 0 | Dominant on 3 relations |
-| Config | 4 | 0 | Opaque JSON in `config` field |
+| Config | 4 | — | `draftAndPublish: false` in source |
 | Regulation | 2 | 0 | url + summary |
-| **Home** (singleType) | 1 | 0 | Nested ComponentCarousel → ComponentSlide |
+| **Home** (singleType) | 1 | — | Nested ComponentCarousel → ComponentSlide |
 | ~~Build~~ | 0 | — | Skipped in v1 (empty source) |
+| **Total** | **2,491** | **95** | (drafts loaded as Published by default — see [`preserveSourceDrafts`](#strapi-5-setup)) |
 
 **Plus:**
-- 10 component types (`carousel`, `slide`, `clickthrough`, `banner`, `external-url`, `button`, `menu-item`, `slider-button`, `countdown`, `add-event`)
-- 2,110 upload-file records
+- **5** Strapi 5 component types deployed (`carousel`, `slide`, `clickthrough`, `banner`, `external-url`). Source had 10; 5 unused (`button`, `slider-button`, `menu-item`, `countdown`, `add-event`) intentionally dropped — see plan doc.
+- 2,109 upload-file records
 - ~19 dominant m2m relation edges
 
 **Explicitly excluded** (orphan tables in source DB without `.settings.json` models): `pubs` (1029), `funding-opportunities` (34), `documents` (0), `site-configs` (1), `context-menus` (1).
@@ -673,7 +674,7 @@ After Phase 5 (validate) you should see all 10 checks PASS:
 2. `legacyId` coverage — every source record maps to one S5 record
 3. Draft preservation — drafts have `publishedAt: null` in S5
 4. No Base64 remnants in body fields
-5. Media migration — all 2,110 hashes uploaded
+5. Media migration — all 2,109 hashes uploaded
 6. Media accessibility — all S5 upload URLs return HTTP 200
 7. Relation integrity — every dominant edge spot-checked
 8. Timestamps preserved within ±1s
@@ -699,7 +700,7 @@ Re-running Phase 4 on a populated Strapi 5 should produce **0 new records** — 
 
 ```bash
 pnpm migrate:phase04
-# Expect: "Skipped 5308 (legacyId already exists), Created 0"
+# Expect: "Skipped 2491 (legacyId already exists), Created 0"
 ```
 
 ---
@@ -877,7 +878,7 @@ sqlite3 docs/strapi-3-source/data.db "SELECT COUNT(*) FROM publications"
 # List relation join tables
 sqlite3 docs/strapi-3-source/data.db ".tables" | tr ' ' '\n' | grep -E '__|_components'
 
-# Inspect the upload_file table (2,110 rows)
+# Inspect the upload_file table (2,109 rows)
 sqlite3 docs/strapi-3-source/data.db "SELECT id, name, hash, ext, size FROM upload_file LIMIT 10"
 
 # Check dominance — which side's ID column comes first?

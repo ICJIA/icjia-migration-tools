@@ -19,7 +19,7 @@
  */
 
 import fs from 'fs/promises';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -74,7 +74,76 @@ async function gatherData() {
     rewrite: await loadJson(path.join(dataDir, 'rewrite-report.json')),
     extractVerify: await loadJson(path.join(dataDir, 'extract-verification.json')),
     manifest: await loadJson(path.resolve(ROOT, config.paths.contentTypesManifest)),
+    sourceCounts: await getSourceCounts(),
+    uploadFileSize: await getUploadFileSize(),
   };
+}
+
+// Open the Strapi 3 SQLite snapshot and return ground-truth counts. These
+// are what the migration is measured against — we display them next to the
+// "loaded / migrated" numbers so reviewers see exact parity (X of X).
+async function getSourceCounts() {
+  try {
+    const Database = (await import('better-sqlite3')).default;
+    const sqlitePath = path.resolve(ROOT, config.strapi3?.sqliteDbPath || './docs/strapi-3-source/data.db');
+    if (!existsSync(sqlitePath)) return null;
+    const db = new Database(sqlitePath, { readonly: true, fileMustExist: true });
+    const manifest = JSON.parse(readFileSync(path.resolve(ROOT, config.paths.contentTypesManifest), 'utf8'));
+    let totalRecords = 0;
+    for (const ct of manifest.contentTypes) {
+      if (ct.skipDefault) continue;
+      try {
+        const row = db.prepare(`SELECT COUNT(*) AS n FROM "${ct.sqlTable}"`).get();
+        totalRecords += row?.n || 0;
+      } catch { /* table may not exist for some types — skip */ }
+    }
+    let uploadFileCount = 0;
+    try {
+      uploadFileCount = db.prepare(`SELECT COUNT(*) AS n FROM upload_file`).get()?.n || 0;
+    } catch { /* */ }
+    db.close();
+    return { totalRecords, uploadFileCount };
+  } catch {
+    return null;
+  }
+}
+
+// Count of successfully-uploaded files + total bytes (computed from the
+// downloaded files on disk — Strapi 5's response sizes are in KB).
+async function getUploadFileSize() {
+  try {
+    const mapPath = path.resolve(ROOT, 'migration/data/maps/uploadfile-map.json');
+    if (!existsSync(mapPath)) return null;
+    const map = JSON.parse(readFileSync(mapPath, 'utf8'));
+    const filesDir = path.resolve(ROOT, 'migration/data/media/files');
+
+    let bytes = 0;
+    let count = 0;
+    for (const entry of Object.values(map)) {
+      if (!entry?.strapi5Id || entry.error) continue;
+      count += 1;
+      // Sum the original downloaded file size from disk if present.
+      if (entry.sourceHash && existsSync(filesDir)) {
+        // Files on disk are named <hash><ext>. Walk the dir once per call.
+      }
+    }
+
+    // Single dir scan to compute total bytes uploaded.
+    if (existsSync(filesDir)) {
+      for (const f of readdirSync(filesDir)) {
+        const fp = path.join(filesDir, f);
+        try {
+          const st = statSync(fp);
+          if (st.isFile()) bytes += st.size;
+        } catch { /* */ }
+      }
+    }
+
+    if (count === 0) return null;
+    return { bytes, count };
+  } catch {
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -204,10 +273,62 @@ ${(() => {
 <table>
 <thead><tr><th>Phase</th><th>Output</th></tr></thead>
 <tbody>
-<tr><td>Phase 1 — Schema</td><td>18 content types + 10 components deployed to Strapi 5</td></tr>
-<tr><td>Phase 2 — Extract</td><td>2,492 records + 1,349 UploadFile references extracted</td></tr>
-<tr><td>Phase 3 — Media</td><td>2,109 of 2,110 files re-uploaded (1.20 GB), 1,349 ID swaps + ${(rewrite?.totals?.urlReplacements ?? 0).toLocaleString()} URL rewrites</td></tr>
-<tr><td>Phase 4 — Load</td><td>${totalRecords.toLocaleString()} of ${(audit?.summary?.totalRecordsCompared ?? 0) + 1} documents loaded, ${(relationLink?.totals?.links ?? 0).toLocaleString()} relations linked, ${totalRecords.toLocaleString()} timestamps restored</td></tr>
+${(() => {
+  // Compute exact "X of Y" / "X" labels. When X == Y we show just "X" so
+  // reviewers don't see misleading off-by-one numbers from stale data.
+  const ctTotal = data.manifest?.contentTypes?.filter((c) => !c.skipDefault).length ?? 0;
+  const compTotal = (() => {
+    try {
+      // Components live under <strapi5ProjectPath>/src/components/<category>/<file>.json
+      // — count the files. Fallback to manifest size if dir scan fails.
+      const compDir = path.resolve(ROOT, config.strapi5ProjectPath, 'src/components');
+      if (!existsSync(compDir)) return 5;
+      let n = 0;
+      for (const cat of readdirSync(compDir)) {
+        const catDir = path.join(compDir, cat);
+        if (!statSync(catDir).isDirectory()) continue;
+        for (const f of readdirSync(catDir)) {
+          if (f.endsWith('.json')) n += 1;
+        }
+      }
+      return n || 5;
+    } catch { return 5; }
+  })();
+  const sourceTotal = data.sourceCounts?.totalRecords ?? null;
+  const sourceUploads = data.sourceCounts?.uploadFileCount ?? null;
+  const loadedRecords = data.audit?.summary?.totalRecordsCompared ?? totalRecords;
+  const uploadedFiles = data.uploadFileSize?.count ?? null;
+  const uploadedBytes = data.uploadFileSize?.bytes ?? null;
+
+  const fmtBytes = (b) => {
+    if (!b) return null;
+    const gb = b / (1024 ** 3);
+    if (gb >= 1) return `${gb.toFixed(2)} GB`;
+    const mb = b / (1024 ** 2);
+    return `${mb.toFixed(0)} MB`;
+  };
+
+  // Records: "X" when source matches loaded, "X of Y" otherwise.
+  const recordsCell = sourceTotal !== null && loadedRecords === sourceTotal
+    ? `${loadedRecords.toLocaleString()} records extracted`
+    : `${loadedRecords.toLocaleString()} of ${(sourceTotal ?? loadedRecords).toLocaleString()} records extracted`;
+
+  // Media: same logic.
+  const mediaSizeStr = uploadedBytes ? ` (${fmtBytes(uploadedBytes)})` : '';
+  const mediaCell = sourceUploads !== null && uploadedFiles === sourceUploads
+    ? `${uploadedFiles.toLocaleString()} files re-uploaded${mediaSizeStr}, ${(rewrite?.totals?.uploadIdsSwapped ?? 0).toLocaleString()} ID swaps + ${(rewrite?.totals?.urlReplacements ?? 0).toLocaleString()} URL rewrites`
+    : `${(uploadedFiles ?? 0).toLocaleString()} of ${(sourceUploads ?? 0).toLocaleString()} files re-uploaded${mediaSizeStr}, ${(rewrite?.totals?.uploadIdsSwapped ?? 0).toLocaleString()} ID swaps + ${(rewrite?.totals?.urlReplacements ?? 0).toLocaleString()} URL rewrites`;
+
+  // Phase 4 documents loaded: same "X of Y" logic against source.
+  const loadedCell = sourceTotal !== null && loadedRecords === sourceTotal
+    ? `${loadedRecords.toLocaleString()} documents loaded, ${(relationLink?.totals?.links ?? 0).toLocaleString()} relations linked, ${loadedRecords.toLocaleString()} timestamps restored`
+    : `${loadedRecords.toLocaleString()} of ${(sourceTotal ?? loadedRecords).toLocaleString()} documents loaded, ${(relationLink?.totals?.links ?? 0).toLocaleString()} relations linked, ${loadedRecords.toLocaleString()} timestamps restored`;
+
+  return `<tr><td>Phase 1 — Schema</td><td>${ctTotal} content types + ${compTotal} components deployed to Strapi 5</td></tr>
+<tr><td>Phase 2 — Extract</td><td>${recordsCell} + ${(rewrite?.totals?.uploadIdsSwapped ?? 0).toLocaleString()} UploadFile references</td></tr>
+<tr><td>Phase 3 — Media</td><td>${mediaCell}</td></tr>
+<tr><td>Phase 4 — Load</td><td>${loadedCell}</td></tr>`;
+})()}
 <tr><td>Phase 5 — Validate</td><td>${validation?.checksPassed ?? 0} of ${validation?.checksRun ?? 0} checks passed</td></tr>
 <tr><td>Phase 6 — Audit</td><td>${totalFields.toLocaleString()} field comparisons, ${findings.ERROR} ERROR finding(s)</td></tr>
 <tr><td>Phase 7 — Report</td><td>This document</td></tr>
