@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3] - 2026-05-03
+
+### Documentation — production deployment topology + Forge install flow
+
+The "Deploying to production" README section previously assumed Strapi 5
+was already running somewhere — but the recurring confusion is around
+the install step itself: where `install-strapi5.sh` runs, where the
+migration tool runs, and how the two relate. Three additions to clarify:
+
+- **"Topology — what runs where"** table makes the local-vs-server
+  split explicit. Migration tool always runs on the developer's laptop;
+  Strapi 5 lives on the prod server; `.env` with `STRAPI5_TOKEN` stays
+  local-only and never gets pushed to prod.
+- **"Step 0: Provision Strapi 5 on prod (Laravel Forge example)"**
+  walks through the full sequence: site root creation, `git clone`
+  inside the site root, `install-strapi5.sh --port=5150`, pm2 startup,
+  nginx via Forge UI, admin user + API token generation. Includes the
+  resulting on-disk layout under `~/v2.agency.icjia-api.cloud/`.
+- **Forge-specific footgun** — Forge's site-root + auto-deploy
+  assumptions can conflict when two repos sit under the site root.
+  Documented two workarounds (disable Forge auto-deploy, or move the
+  tooling repo to `~/icjia-migration-tools/` and pass `--target=...`).
+- **"Why install-strapi5.sh has to run on the server"** — `better-sqlite3`
+  and `sharp` ship architecture-specific `.node` binaries, so a Mac-arm64
+  build can't be SCP'd to a Linux x86_64 box.
+
+Option A's procedure block was also refreshed to use `pnpm set-token`
+(writes to `.env`) instead of the deprecated `export STRAPI5_TOKEN=…`,
+and explicitly sets `SSH_HOST` / `SSH_USER` / `SSH_STRAPI_DIR` which the
+v0.10.0 audit made required (no production-IP fallback).
+
+No code changes; suite still 55/55 green.
+
 ## [0.10.2] - 2026-05-03
 
 ### Added — interactive token recovery in `pnpm migrate:full`
