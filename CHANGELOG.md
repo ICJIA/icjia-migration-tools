@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.8] - 2026-05-03
+
+### Added — `update.sh` symlinked into the Strapi 5 install dir
+
+`install-strapi5.sh` now creates a symlink at `<target>/update.sh`
+pointing back at the migration-tools repo's `update.sh`. After the
+initial migration, an editor / ops person can `cd` into the Strapi 5
+install directory and run `./update.sh --target=local --update-newer`
+directly — no need to remember the migration-tools repo path.
+
+The symlink stores an absolute path captured at install time (the
+migration-tools repo's location). Works on prod servers identically to
+local. If you move the migration-tools repo, re-run install-strapi5.sh
+or recreate the link manually with `ln -sf`.
+
+The install script's "next steps" output gained an "Incremental sync"
+section documenting the symlink and the typical `./update.sh` invocation.
+
 ## [0.9.7] - 2026-05-03
 
 ### Added — source-drafts checklist for the editor

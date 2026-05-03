@@ -309,6 +309,29 @@ EOF
 ok "wrote $TARGET/ecosystem.config.cjs (app name: $APP_NAME, port: $PORT)"
 
 # ─────────────────────────────────────────────────────────────────────
+# Symlink update.sh into the Strapi 5 dir
+# ─────────────────────────────────────────────────────────────────────
+# So the editor can cd into the Strapi 5 install and run ./update.sh
+# directly without having to remember the migration-tools repo path.
+# update.sh's SCRIPT_DIR resolution follows the symlink back to the repo.
+
+step "Linking update.sh into the Strapi 5 dir"
+
+UPDATE_SRC="$SCRIPT_DIR/update.sh"
+UPDATE_LINK="$TARGET/update.sh"
+
+if [ ! -f "$UPDATE_SRC" ]; then
+  warn "update.sh not found at $UPDATE_SRC — skipping symlink"
+elif [ -e "$UPDATE_LINK" ] || [ -L "$UPDATE_LINK" ]; then
+  rm -f "$UPDATE_LINK"
+  ln -s "$UPDATE_SRC" "$UPDATE_LINK"
+  ok "replaced $UPDATE_LINK → $UPDATE_SRC"
+else
+  ln -s "$UPDATE_SRC" "$UPDATE_LINK"
+  ok "linked $UPDATE_LINK → $UPDATE_SRC"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Done — print next steps
 # ─────────────────────────────────────────────────────────────────────
 
@@ -350,6 +373,12 @@ echo "       ${DIM}cd $TARGET${RESET}"
 echo "       ${DIM}pm2 start ecosystem.config.cjs${RESET}"
 echo "       ${DIM}pm2 save${RESET}                  ${DIM}# persist across reboots${RESET}"
 echo "       ${DIM}pm2 startup${RESET}               ${DIM}# follow the printed sudo command${RESET}"
+echo ""
+echo "${BOLD}Incremental sync (after the first migration):${RESET}"
+echo "  ${CYAN}update.sh${RESET} is symlinked into the Strapi 5 dir, so:"
+echo "       ${DIM}cd $TARGET${RESET}"
+echo "       ${DIM}./update.sh --target=local --update-newer${RESET}    ${DIM}# pull latest Strapi 3 changes${RESET}"
+echo "  (Symlink target: ${DIM}$UPDATE_SRC${RESET} — don't move the migration-tools repo or the link breaks.)"
 echo ""
 if [ "$KEEP_MIGRATION_DATA" -eq 0 ]; then
   echo "  ${DIM}(Migration state was wiped — Phase 1+ will rebuild from scratch.)${RESET}"
