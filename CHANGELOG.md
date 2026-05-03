@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.12] - 2026-05-03
+
+### Fixed — Phase 1 orchestrator's "Strapi 5 is running" detection
+
+`isStrapi5Running()` in `01-run-phase.js` only treated HTTP 200-299 / 401 /
+403 as "running". Strapi 5's GET / returns **HTTP 302** (redirect to
+/admin), so the orchestrator falsely reported "Strapi 5 is not running"
+even when it was up and serving requests, then asked the user to start
+it. Confusing — preflight had just confirmed the server was reachable.
+
+Fix: accept any HTTP status in 200-499 (with `redirect: 'manual'` so
+fetch doesn't auto-follow the 302). Anything in that range means the
+server is responding, regardless of which page it returns.
+
 ## [0.9.11] - 2026-05-03
 
 ### Added — preflight now write-probes the API token

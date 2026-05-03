@@ -90,8 +90,15 @@ function waitForEnter(message) {
  */
 async function isStrapi5Running() {
   try {
-    const res = await fetch(config.strapi5.apiUrl, { signal: AbortSignal.timeout(5000) });
-    return res.ok || res.status === 403 || res.status === 401;
+    // `redirect: 'manual'` + accept any 2xx/3xx/401/403 — Strapi 5 returns 302
+    // (redirect to /admin) for GET /, which fetch otherwise auto-follows. We
+    // just need to know the server is responding, not where it redirects to.
+    const res = await fetch(config.strapi5.apiUrl, {
+      signal: AbortSignal.timeout(5000),
+      redirect: 'manual',
+    });
+    // Anything that came back from the server (any HTTP status) means it's up.
+    return res.status >= 200 && res.status < 500;
   } catch {
     return false;
   }
