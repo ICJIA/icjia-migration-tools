@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.13] - 2026-05-03
+
+### Added — preflight checks port match between config.js and Strapi 5 .env
+
+New preflight check: "Port matches Strapi 5 .env". Reads PORT from
+`<strapi5ProjectPath>/.env`, parses the port out of `config.strapi5.apiUrl`,
+and FAILs if they disagree (with explicit fix instructions covering both
+directions: edit config.js OR edit .env). PASSes when they match (or
+SKIPs if Strapi 5 is remote / .env not local).
+
+Catches the failure mode we hit twice this session: install-strapi5.sh
+sets a new PORT in .env, but the gitignored config.js still points at
+the old port, so preflight's "Server reachable" check fails with an
+unhelpful "fetch failed" message. Now the port-match check runs after
+"Server reachable" and tells the operator exactly what to fix.
+
 ## [0.9.12] - 2026-05-03
 
 ### Fixed — Phase 1 orchestrator's "Strapi 5 is running" detection

@@ -571,6 +571,58 @@ async function checkStrapi5Project() {
   }
 }
 
+async function checkStrapi5PortMatches() {
+  if (!CONFIG) return { status: 'SKIP', detail: 'config not loaded' };
+  if (SKIP_STRAPI5) return { status: 'SKIP', detail: 'skipped via --skip-strapi5' };
+
+  // Extract the configured port from config.strapi5.apiUrl (e.g.,
+  // http://localhost:1340 → 1340). If it's HTTPS / non-localhost we skip
+  // — prod typically goes through nginx on 443, no .env port to match.
+  let configPort = null;
+  try {
+    const u = new URL(CONFIG.strapi5.apiUrl);
+    if (u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+      return { status: 'SKIP', detail: 'remote Strapi 5 (no .env to compare)' };
+    }
+    configPort = u.port || (u.protocol === 'https:' ? '443' : '80');
+  } catch {
+    return { status: 'WARN', detail: `cannot parse strapi5.apiUrl: ${CONFIG.strapi5.apiUrl}` };
+  }
+
+  const projectPath = path.resolve(ROOT, CONFIG.strapi5ProjectPath);
+  const envPath = path.join(projectPath, '.env');
+  if (!existsSync(envPath)) {
+    return { status: 'SKIP', detail: '.env not found in Strapi 5 project' };
+  }
+
+  let envPort = null;
+  try {
+    const content = await fs.readFile(envPath, 'utf8');
+    const m = content.match(/^\s*PORT\s*=\s*(\d+)/m);
+    if (!m) {
+      // No explicit PORT — Strapi 5 default is 1337. Compare to that.
+      envPort = '1337';
+    } else {
+      envPort = m[1];
+    }
+  } catch (err) {
+    return { status: 'WARN', detail: `cannot read .env: ${err.message}` };
+  }
+
+  if (envPort !== configPort) {
+    return {
+      status: 'FAIL',
+      detail: `port mismatch — config.js says :${configPort}, Strapi 5 .env says :${envPort}`,
+      guidance: `Either:\n     ` +
+        `(a) Edit config.js → strapi5.apiUrl + graphqlUrl to use port ${envPort}, OR\n     ` +
+        `(b) Edit ${path.relative(ROOT, envPath)} → PORT=${configPort} and restart Strapi 5\n     ` +
+        `(install-strapi5.sh syncs both automatically — re-running it with --keep-migration-data is the safe option.)`,
+    };
+  }
+
+  return { detail: `config.js and Strapi 5 .env both use port :${envPort}` };
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Main
 // ─────────────────────────────────────────────────────────────────────
@@ -679,6 +731,7 @@ async function main() {
   await check('strapi5', 'Server reachable', checkStrapi5Reachable);
   await check('strapi5', 'API token valid', checkStrapi5Auth);
   await check('strapi5', 'Strapi 5 project directory', checkStrapi5Project);
+  await check('strapi5', 'Port matches Strapi 5 .env', checkStrapi5PortMatches);
 
   // Summary
   const passed = checks.filter((c) => c.status === 'PASS').length;
