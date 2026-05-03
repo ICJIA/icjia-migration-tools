@@ -1,6 +1,12 @@
 # Strapi 3 source database — contains internal Strapi tables and password hashes
 docs/strapi-3-source/data.db
 
+# Strapi 3 runtime config snapshot — server.js holds an ADMIN_JWT_SECRET
+# fallback; the migration tool doesn't read any of these files (it only needs
+# api/<type>/models/*.settings.json and components/), so the whole dir stays
+# local-only.
+docs/strapi-3-source/config/
+
 # Dependencies
 node_modules/
 .pnpm-store/
