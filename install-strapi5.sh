@@ -342,17 +342,29 @@ fi
 # different port configured.
 
 CONFIG_JS="$SCRIPT_DIR/config.js"
+ENV_FILE="$SCRIPT_DIR/.env"
 if [ -f "$CONFIG_JS" ]; then
-  step "Syncing config.js (port → $PORT, clearing stale token)"
-  # 1. Clear the strapi5 token. Uses perl one-liner (BSD vs GNU sed differs on -i).
+  step "Syncing config.js port → $PORT (and clearing stale token from any source)"
+  # 1. Clear any stale token literal still living in config.js (legacy path —
+  #    v0.10.1+ stores tokens in .env, but a literal here would still trigger
+  #    the load-config secret-shape warning). Uses perl one-liner (BSD vs GNU
+  #    sed differs on -i).
   perl -i -pe "s/(process\.env\.STRAPI5_TOKEN \|\| ')[^']*(')/\1\2/g" "$CONFIG_JS"
-  ok "config.js token cleared"
+  ok "config.js token literal cleared"
   # 2. Rewrite all http://localhost:<digits> occurrences to use $PORT.
   #    Only matches localhost URLs — agency.icjia-api.cloud (strapi3) is
   #    untouched. Affects strapi5.graphqlUrl + strapi5.apiUrl + any other
   #    localhost references. Idempotent (safe to re-run).
   perl -i -pe "s|http://localhost:\d+|http://localhost:$PORT|g" "$CONFIG_JS"
   ok "config.js localhost URLs synced to port $PORT"
+fi
+
+# 3. Clear stale STRAPI5_TOKEN line in .env (the actual store under v0.10.1+).
+#    Don't delete the whole file — it may carry other vars (SSH_*, STRAPI3_*).
+if [ -f "$ENV_FILE" ]; then
+  step "Clearing stale STRAPI5_TOKEN from .env"
+  perl -i -pe 's/^STRAPI5_TOKEN=.*$//; s/^\s*\n//' "$ENV_FILE"
+  ok ".env STRAPI5_TOKEN cleared"
 fi
 
 # ─────────────────────────────────────────────────────────────────────
@@ -382,8 +394,8 @@ echo "       Copy the token (shown ${BOLD}once${RESET} at creation)"
 echo ""
 echo "  ${CYAN}4.${RESET} Set the token for the migration tool"
 echo "       Paste it at the ${BOLD}prompt below${RESET} when asked, OR"
-echo "       Run ${CYAN}pnpm set-token${RESET} from the migration-tools repo, OR"
-echo "       Edit ${CYAN}$CONFIG_JS${RESET} → strapi5.token directly"
+echo "       Run ${CYAN}pnpm set-token${RESET} from the migration-tools repo"
+echo "       ${DIM}(Both paths upsert STRAPI5_TOKEN= into .env at mode 0600.)${RESET}"
 echo ""
 echo "  ${CYAN}5.${RESET} From the migration tool repo, kick off the pipeline"
 echo "       ${DIM}cd $SCRIPT_DIR${RESET}"
@@ -418,33 +430,29 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────
 # Once Strapi 5 is running and you've created an admin user + Full-access
 # API token, paste it below. Leave blank (Enter / Ctrl+C) to skip and
-# set it later via `pnpm set-token` or by editing config.js directly.
+# set it later via `pnpm set-token`. The value is written to .env (mode
+# 0600) — never to config.js — so the v0.10.1+ load-config audit stays clean.
 
-if [ -f "$CONFIG_JS" ]; then
-  echo "${BOLD}── Paste your new Strapi 5 API token (or press Enter to skip) ──${RESET}"
-  echo "${DIM}(Tip: keep this terminal open, do steps 1–3 above in another window/browser, then come back here.)${RESET}"
-  echo ""
-  # -r: don't escape backslashes; -p: prompt; we want the input visible since
-  # the user is pasting a long token and a typo is silent otherwise.
-  read -rp "  token: " NEW_TOKEN || NEW_TOKEN=""
-  if [ -n "$NEW_TOKEN" ]; then
-    # Sanity: the token should be a long hex string. Reject if it has
-    # whitespace, single-quotes, or is suspiciously short.
-    if echo "$NEW_TOKEN" | grep -q "[ '\"]"; then
-      warn "Token contains whitespace or quotes — refusing to write. Edit config.js manually."
-    elif [ "${#NEW_TOKEN}" -lt 64 ]; then
-      warn "Token is only ${#NEW_TOKEN} chars (expected ~256). Refusing to write — paste it again via pnpm set-token."
-    else
-      perl -i -pe "s/(process\.env\.STRAPI5_TOKEN \|\| ')[^']*(')/\${1}${NEW_TOKEN}\${2}/g" "$CONFIG_JS"
-      ok "Token written to $CONFIG_JS"
-      echo ""
-      echo "${GREEN}Now you can run:${RESET}"
-      echo "       ${DIM}cd $SCRIPT_DIR${RESET}"
-      echo "       ${DIM}pnpm preflight${RESET}"
-    fi
+echo "${BOLD}── Paste your new Strapi 5 API token (or press Enter to skip) ──${RESET}"
+echo "${DIM}(Tip: keep this terminal open, do steps 1–3 above in another window/browser, then come back here.)${RESET}"
+echo ""
+# -r: don't escape backslashes; -p: prompt; we want the input visible since
+# the user is pasting a long token and a typo is silent otherwise.
+read -rp "  token: " NEW_TOKEN || NEW_TOKEN=""
+if [ -n "$NEW_TOKEN" ]; then
+  # Delegate validation + .env upsert to set-strapi5-token.js so we have
+  # one source of truth for "how a token gets persisted" (length check,
+  # whitespace rejection, mode 0600, idempotent upsert).
+  if (cd "$SCRIPT_DIR" && node migration/scripts/set-strapi5-token.js "$NEW_TOKEN"); then
+    echo ""
+    echo "${GREEN}Now you can run:${RESET}"
+    echo "       ${DIM}cd $SCRIPT_DIR${RESET}"
+    echo "       ${DIM}pnpm preflight${RESET}"
   else
-    echo "${DIM}Skipped. Set the token later with:${RESET}"
-    echo "       ${DIM}cd $SCRIPT_DIR && pnpm set-token${RESET}"
+    warn "Token rejected by set-strapi5-token.js — fix the issue above and re-run pnpm set-token."
   fi
-  echo ""
+else
+  echo "${DIM}Skipped. Set the token later with:${RESET}"
+  echo "       ${DIM}cd $SCRIPT_DIR && pnpm set-token${RESET}"
 fi
+echo ""

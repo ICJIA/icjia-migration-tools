@@ -23,9 +23,15 @@
  *   pnpm migrate:full --start-from=phase04   # skip earlier phases
  *   pnpm migrate:full --skip=phase07         # skip the report step
  *   pnpm migrate:full --skip-preflight       # bypass the environment check
+ *   pnpm migrate:full --non-interactive      # never prompt (for CI)
+ *
+ * Interactive token recovery: when preflight fails on an interactive TTY,
+ * the orchestrator offers to run `pnpm set-token` and re-run preflight
+ * before bailing. Skip with --non-interactive (or set CI=1).
  */
 
 import { spawn } from 'child_process';
+import readline from 'readline';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -49,6 +55,7 @@ const RESET = '\x1b[0m';
 const argv = process.argv.slice(2);
 const SKIP_PREFLIGHT = argv.includes('--skip-preflight');
 const SKIP_POSTFLIGHT = argv.includes('--skip-postflight');
+const NON_INTERACTIVE = argv.includes('--non-interactive') || process.env.CI === '1';
 const START_FROM = argv.find((a) => a.startsWith('--start-from='))?.slice('--start-from='.length);
 const SKIP_LIST = argv
   .filter((a) => a.startsWith('--skip='))
@@ -75,6 +82,53 @@ function runScript(scriptPath, args = []) {
       resolve(1);
     });
   });
+}
+
+/**
+ * Ask a yes/no question on the TTY. Returns true for y/yes (case-insensitive).
+ */
+function promptYesNo(question) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test((answer || '').trim()));
+    });
+  });
+}
+
+/**
+ * On preflight failure in an interactive shell, offer to launch
+ * `pnpm set-token` and re-run preflight. Most preflight failures are stale
+ * or missing API tokens — this short-circuits the otherwise-tedious
+ *   "fail → run set-token → re-run migrate:full" loop.
+ *
+ * Returns the new preflight exit code (0 if the retry succeeded), or the
+ * original code if the user declined or the prompt path failed.
+ */
+async function offerTokenFix(preflightStage, originalCode) {
+  if (NON_INTERACTIVE || !process.stdin.isTTY) return originalCode;
+  console.log('');
+  console.log(
+    `${YELLOW}!${RESET} A common cause of preflight failure is a missing or stale ` +
+      `${BOLD}STRAPI5_TOKEN${RESET}.`,
+  );
+  const fix = await promptYesNo(
+    `  Run ${CYAN}pnpm set-token${RESET} now and retry preflight? ${DIM}[y/N] ${RESET}`,
+  );
+  if (!fix) return originalCode;
+
+  const tokenCode = await runScript('migration/scripts/set-strapi5-token.js');
+  if (tokenCode !== 0) {
+    console.log(
+      `${YELLOW}set-token exited ${tokenCode} — falling through to original preflight failure.${RESET}`,
+    );
+    return originalCode;
+  }
+  console.log('');
+  console.log(`${CYAN}Re-running preflight with the new token...${RESET}`);
+  console.log('');
+  return runScript(preflightStage.script);
 }
 
 async function main() {
@@ -122,7 +176,14 @@ async function main() {
     console.log(`${CYAN}════════════════════════════════════════════════════════════════${RESET}`);
     console.log('');
 
-    const code = await runScript(stage.script);
+    let code = await runScript(stage.script);
+
+    // On preflight failure, offer to fix the token interactively before
+    // bailing — short-circuits the most common stumbling block.
+    if (code !== 0 && stage.id === 'preflight') {
+      code = await offerTokenFix(stage, code);
+    }
+
     const elapsed = Date.now() - stageStart;
     results.push({ stage: stage.id, code, elapsedMs: elapsed });
 

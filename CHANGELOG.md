@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2] - 2026-05-03
+
+### Added — interactive token recovery in `pnpm migrate:full`
+
+When the preflight stage of `migrate:full` fails on an interactive TTY,
+the orchestrator now offers to run `pnpm set-token` (which writes to
+`.env`) and re-runs preflight before bailing. Short-circuits the most
+common stumbling block: stale or missing `STRAPI5_TOKEN` after a Strapi
+admin reset / token regeneration.
+
+Behavior:
+
+- Only fires on a TTY. Skipped automatically when stdout is non-tty (CI,
+  pipes), when `CI=1` is set, or when `--non-interactive` is passed.
+- Prompts: `Run pnpm set-token now and retry preflight? [y/N]`. Default
+  is "no" — pressing Enter falls through to the existing failure handler.
+- If the user accepts, runs `migration/scripts/set-strapi5-token.js`
+  interactively (which already validates length, rejects whitespace, sets
+  mode 0600, upserts into `.env`). On success, re-runs preflight once.
+- Re-run continues into phases 1–7 if preflight passes; otherwise exits
+  with the second failure code.
+
+New flag:
+
+- `--non-interactive` on `migrate:full` to opt out of the prompt
+  (functionally equivalent to running in a non-TTY).
+
+This was a UX gap from v0.10.1: tokens moved to `.env`, but
+`migrate:full` had no path back from a stale-token preflight failure
+other than running `pnpm set-token` manually and starting over. Now the
+orchestrator handles it inline.
+
+### Fixed — install-strapi5.sh token prompt now writes to `.env`
+
+The first-time-setup token prompt in `install-strapi5.sh` (line 424)
+still patched `config.js` via a perl one-liner, leaving the token in
+the wrong place under v0.10.1's `.env`-first loader (`.env` always wins,
+so the literal in `config.js` was silently ignored). The prompt now
+delegates to `migration/scripts/set-strapi5-token.js` so a freshly
+installed Strapi 5 lands its token in `.env` like any other rotation.
+Also clears any stale `STRAPI5_TOKEN=` line in `.env` at install time
+(in addition to the existing config.js literal-clear), so a re-run of
+`install-strapi5.sh` against a fresh Strapi 5 doesn't carry forward the
+old install's token.
+
+### Fixed — security suite tmp-dir now uses `os.tmpdir()`
+
+Two `.env`-loader tests in `migration/tests/security.test.js` were
+mkdtemping under `migration/data/` — fine on a hot dev box, broken on a
+fresh checkout where that directory hadn't been created yet. Switched
+both to `os.tmpdir()` so the suite passes from a clean clone.
+
 ## [0.10.1] - 2026-05-03
 
 ### Security — `.env`-based token storage; secret-literal scan now sees the source file

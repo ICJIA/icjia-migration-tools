@@ -21,6 +21,7 @@ import { fileURLToPath } from 'url';
 import { fileURLToPath as urlToPath } from 'url';
 import { execSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 
 import {
   requireEnv,
@@ -522,7 +523,7 @@ test('.env loader reads KEY=value lines', () => {
   // Use a tmp .env via env var so the parent process isn't affected. The
   // load-config module reads from project root, so we write a child probe
   // that points at a fresh dir.
-  const tmp = fs.mkdtempSync(path.join(ROOT, 'migration/data/.env-test-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
   try {
     fs.writeFileSync(
       path.join(tmp, '.env'),
@@ -590,7 +591,7 @@ test('.env loader: shell env vars win over .env values', () => {
 
 test('.env loader: missing .env file is silently OK', () => {
   // Run load-config from a tmp cwd that has no .env — should not throw.
-  const tmp = fs.mkdtempSync(path.join(ROOT, 'migration/data/.env-test-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "env-test-"));
   try {
     const probe = `
       process.env.MIGRATION_SUPPRESS_SECRET_WARNINGS = '1';
