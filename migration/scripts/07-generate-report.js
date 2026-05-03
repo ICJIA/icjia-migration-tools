@@ -19,7 +19,7 @@
  */
 
 import fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -184,6 +184,21 @@ function buildHtml(data) {
 <thead><tr><th>Type</th><th>Kind</th><th>Records</th><th>Fields</th><th>OK</th><th>EXPECTED</th><th>ERROR</th></tr></thead>
 <tbody>${ctRows}</tbody>
 </table>
+
+${(() => {
+  // Callout linking to the source-drafts checklist (if check-source-drafts has run).
+  const dpath = path.resolve(ROOT, 'migration/data/source-drafts.json');
+  if (!existsSync(dpath)) return '';
+  let s;
+  try { s = JSON.parse(readFileSync(dpath, 'utf8')); } catch { return ''; }
+  if (!s.totalDrafts) return '';
+  return `<h2>Source drafts checklist</h2>
+<div class="note">
+  Strapi 3 had <strong>${s.totalDrafts}</strong> records marked as draft across <strong>${s.types.length}</strong> content type${s.types.length === 1 ? '' : 's'}.
+  The migration loaded those as <strong>Published</strong> in Strapi 5 (default behavior). If you want them to remain as drafts, see
+  <a href="source-drafts.md"><code>source-drafts.md</code></a> for a per-record checklist with legacyId + identifier — flip each one to "Draft" status in the Strapi 5 admin.
+</div>`;
+})()}
 
 <h2>Pipeline summary</h2>
 <table>

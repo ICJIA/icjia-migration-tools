@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-05-03
+
+### Added — source-drafts checklist for the editor
+
+When the migration runs with the v0.9.5 default (`preserveSourceDrafts:
+false`), every record loads into Strapi 5 as Published. An editor often
+wants to know which records were drafts in Strapi 3 so they can flip
+those back to Draft manually after the migration. This release adds:
+
+- `migration/scripts/check-source-drafts.js` — read-only sweep over the
+  Strapi 3 SQLite snapshot. Lists every record where `published_at IS
+  NULL`, grouped by content type, with `legacyId`, identifier (title /
+  fullName / firstName+lastName / slug fallback), source slug, and
+  source `updated_at`. Skips content types where `draftAndPublish:
+  false` in source (e.g., tag, config) — those don't have the concept.
+- Outputs JSON (`migration/data/source-drafts.json`) +
+  Markdown (`migration/data/source-drafts.md`).
+- The Markdown copy is mirrored into Strapi 5's `public/` so it serves
+  at `<strapi-base>/source-drafts.md` (alongside the migration report).
+- Wired into `postflight.js` as **Stage 5/5** — runs automatically after
+  validate + audit + report. Postflight's "Reports produced" list and
+  "Next steps" sequence both reference the source-drafts checklist.
+- Wired into the Phase 7 HTML migration report — a "Source drafts
+  checklist" callout appears (with link to `source-drafts.md`) when
+  `source-drafts.json` exists.
+- New `pnpm check-drafts` script alias.
+
+For the current ICJIA dataset: 95 source drafts across 8 content types
+(publication 32, biography 28, job 13, grant 9, page 5, post 5,
+meeting 2, unit 1).
+
 ## [0.9.6] - 2026-05-02
 
 ### Fixed — Phase 4c was clobbering the draft-row marker

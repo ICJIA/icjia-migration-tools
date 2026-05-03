@@ -202,6 +202,26 @@ async function main() {
     stages.push({ name: 'report', code: 0, durationMs: 0, skipped: true });
   }
 
+  // ── Stage 5: source-drafts checklist ─────────────────────────────
+  // Read-only sweep over the Strapi 3 SQLite snapshot to list every record
+  // that was a draft in source. With preserveSourceDrafts: false (default),
+  // these were all loaded as Published in Strapi 5; this report tells the
+  // editor exactly which ones to flip back to draft if desired.
+  log(`${BOLD}── Stage 5/5: Source-drafts checklist ──${RESET}`);
+  log('');
+  const draftsScriptPath = 'migration/scripts/check-source-drafts.js';
+  if (existsSync(path.resolve(ROOT, draftsScriptPath))) {
+    const drafts = await runScript(draftsScriptPath);
+    stages.push({ name: 'source-drafts', ...drafts });
+    if (drafts.code !== 0) {
+      log('');
+      log(`${YELLOW}Source-drafts report failed (non-blocking).${RESET}`);
+    }
+  } else {
+    stages.push({ name: 'source-drafts', code: -1, durationMs: 0, skipped: true });
+  }
+  log('');
+
   // ── Aggregate stats ──────────────────────────────────────────────
   const validationReport = await loadJsonIfExists('migration/data/validation-report.json');
   const auditReport = await loadJsonIfExists('migration/data/audit-report.json');
@@ -243,6 +263,10 @@ async function main() {
         ? 'migration/data/migration-report.html' : null,
       docx: existsSync(path.resolve(ROOT, 'migration/data/migration-report.docx'))
         ? 'migration/data/migration-report.docx' : null,
+      sourceDraftsMd: existsSync(path.resolve(ROOT, 'migration/data/source-drafts.md'))
+        ? 'migration/data/source-drafts.md' : null,
+      sourceDraftsJson: existsSync(path.resolve(ROOT, 'migration/data/source-drafts.json'))
+        ? 'migration/data/source-drafts.json' : null,
     },
   };
 
@@ -329,9 +353,17 @@ async function main() {
   log('');
   log(`${BOLD}Next steps:${RESET}`);
   log(`  1. Review ${CYAN}migration/data/audit-report.md${RESET} with stakeholders.`);
-  log(`  2. Archive the HTML/DOCX reports as cutover documentation.`);
-  log(`  3. Cut the frontend over to the new Strapi 5 endpoint.`);
-  log(`  4. (Optional) Schedule v1.1 cleanup — see docs/icjia-public-website-migration-plan.md`);
+  if (summary.reports.sourceDraftsMd) {
+    log(`  2. (If you want to keep source drafts as drafts) Use ${CYAN}migration/data/source-drafts.md${RESET}`);
+    log(`     as a checklist — flip those records to "Draft" status in the Strapi 5 admin.`);
+    log(`  3. Archive the HTML/DOCX reports as cutover documentation.`);
+    log(`  4. Cut the frontend over to the new Strapi 5 endpoint.`);
+    log(`  5. (Optional) Schedule v1.1 cleanup — see docs/icjia-public-website-migration-plan.md`);
+  } else {
+    log(`  2. Archive the HTML/DOCX reports as cutover documentation.`);
+    log(`  3. Cut the frontend over to the new Strapi 5 endpoint.`);
+    log(`  4. (Optional) Schedule v1.1 cleanup — see docs/icjia-public-website-migration-plan.md`);
+  }
   log('');
 
   process.exit(0);
