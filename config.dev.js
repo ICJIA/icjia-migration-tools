@@ -4,7 +4,7 @@
  *
  * Use this profile for local testing:
  *   - Strapi 3: production ICJIA public website API (read-only, remote)
- *   - Strapi 5: local instance on your Mac (localhost:1338)
+ *   - Strapi 5: local instance on your Mac (localhost:1340)
  *
  * To use: cp config.dev.js config.js
  * Or: MIGRATION_ENV=dev node migration/scripts/01-run-phase.js
@@ -19,8 +19,8 @@ export default {
   },
 
   strapi5: {
-    graphqlUrl: 'http://localhost:1338/graphql',
-    apiUrl: 'http://localhost:1338',
+    graphqlUrl: 'http://localhost:1340/graphql',
+    apiUrl: 'http://localhost:1340',
     token: process.env.STRAPI5_TOKEN || '', // Set after creating token in local Strapi 5 admin
     dbPath: process.env.STRAPI5_DB_PATH || '../icjia-public-strapi5/.tmp/data.db',
   },

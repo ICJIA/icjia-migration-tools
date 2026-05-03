@@ -21,7 +21,7 @@
  * If `config.js` does not exist, scripts fall back to `config.example.js` defaults.
  *
  * Profiles:
- *   config.dev.js  — Strapi 3 remote (agency.icjia-api.cloud) + Strapi 5 local (localhost:1338)
+ *   config.dev.js  — Strapi 3 remote (agency.icjia-api.cloud) + Strapi 5 local (localhost:1340)
  *   config.prod.js — Strapi 3 remote + Strapi 5 remote (production hostname)
  */
 
@@ -53,9 +53,9 @@ export default {
    */
   strapi5: {
     /** @type {string} GraphQL endpoint for schema verification */
-    graphqlUrl: process.env.STRAPI5_GRAPHQL_URL || 'http://localhost:1338/graphql',
+    graphqlUrl: process.env.STRAPI5_GRAPHQL_URL || 'http://localhost:1340/graphql',
     /** @type {string} REST API base URL for content creation and media upload */
-    apiUrl: process.env.STRAPI5_API_URL || 'http://localhost:1338',
+    apiUrl: process.env.STRAPI5_API_URL || 'http://localhost:1340',
     /** @type {string} Full-access API token for write operations */
     token: process.env.STRAPI5_TOKEN || '',
     /** @type {string} Path to Strapi 5 SQLite database (for timestamp restoration) */

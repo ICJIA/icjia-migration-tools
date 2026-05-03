@@ -61,7 +61,7 @@ pm2 status "$PM2_NAME"
 # Quick health check
 echo ""
 echo -e "${YELLOW}Health check...${NC}"
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:1337 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:1340 2>/dev/null || echo "000")
 if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "403" ]; then
     echo -e "${GREEN}✓ Strapi is responding (HTTP $HTTP_CODE)${NC}"
 else

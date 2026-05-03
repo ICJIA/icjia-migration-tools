@@ -8,7 +8,7 @@
  *
  * @example
  *   import { GraphQLClient } from '../lib/graphql-client.js';
- *   const client = new GraphQLClient('http://localhost:1337/graphql', 'my-token');
+ *   const client = new GraphQLClient('http://localhost:1340/graphql', 'my-token');
  *   const result = await client.query('{ articles { id title } }');
  */
 

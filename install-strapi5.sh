@@ -42,7 +42,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_TARGET="$(cd "$SCRIPT_DIR/.." && pwd)/icjia-public-strapi5"
 
 TARGET="$DEFAULT_TARGET"
-PORT="1337"
+PORT="1340"
 FORCE=0
 KEEP_MIGRATION_DATA=0
 MIGRATION_REPO="$SCRIPT_DIR"
@@ -332,6 +332,22 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────
+# Clear stale Strapi 5 token from config.js
+# ─────────────────────────────────────────────────────────────────────
+# The fresh Strapi 5 install starts with an empty admin DB, so any token
+# previously stored in config.js is now invalid. Clear it so the user
+# can paste the new one (either via the prompt below, or `pnpm set-token`).
+
+CONFIG_JS="$SCRIPT_DIR/config.js"
+if [ -f "$CONFIG_JS" ]; then
+  step "Clearing stale Strapi 5 token in config.js"
+  # Replace the (process.env.STRAPI5_TOKEN || '<anything>') with empty string.
+  # Uses a perl one-liner for portability (BSD vs GNU sed differs on -i).
+  perl -i -pe "s/(process\.env\.STRAPI5_TOKEN \|\| ')[^']*(')/\1\2/g" "$CONFIG_JS"
+  ok "config.js token cleared (line: token: process.env.STRAPI5_TOKEN || '')"
+fi
+
+# ─────────────────────────────────────────────────────────────────────
 # Done — print next steps
 # ─────────────────────────────────────────────────────────────────────
 
@@ -357,13 +373,15 @@ echo "       Token duration: Unlimited"
 echo "       Copy the token (shown ${BOLD}once${RESET} at creation)"
 echo ""
 echo "  ${CYAN}4.${RESET} Set the token for the migration tool"
-echo "       Edit ${CYAN}config.js${RESET} (gitignored) and paste into strapi5.token"
-echo "       ${DIM}Or:${RESET} ${DIM}export STRAPI5_TOKEN=\"<paste here>\"${RESET}  (per-shell)"
+echo "       Paste it at the ${BOLD}prompt below${RESET} when asked, OR"
+echo "       Run ${CYAN}pnpm set-token${RESET} from the migration-tools repo, OR"
+echo "       Edit ${CYAN}$CONFIG_JS${RESET} → strapi5.token directly"
 echo ""
-echo "  ${CYAN}5.${RESET} From the migration tool repo, kick off the full pipeline"
+echo "  ${CYAN}5.${RESET} From the migration tool repo, kick off the pipeline"
 echo "       ${DIM}cd $SCRIPT_DIR${RESET}"
 echo "       ${DIM}pnpm preflight${RESET}      ${DIM}# verify everything is wired${RESET}"
-echo "       ${DIM}pnpm migrate:full${RESET}   ${DIM}# preflight → phases 1-7 → postflight${RESET}"
+echo "       ${DIM}pnpm migrate:phase01${RESET}  ${DIM}# (manual phase-by-phase)${RESET}"
+echo "       ${DIM}pnpm migrate:full${RESET}   ${DIM}# OR full pipeline (phases 1-7)${RESET}"
 echo ""
 echo "${BOLD}Production (PM2):${RESET}"
 echo "  PM2 ecosystem file generated at:"
@@ -386,3 +404,39 @@ else
   echo "  ${DIM}(Migration data was kept — Phase 2 extracts and Phase 3 downloads will skip cached items.)${RESET}"
 fi
 echo ""
+
+# ─────────────────────────────────────────────────────────────────────
+# Optional: paste the new API token now
+# ─────────────────────────────────────────────────────────────────────
+# Once Strapi 5 is running and you've created an admin user + Full-access
+# API token, paste it below. Leave blank (Enter / Ctrl+C) to skip and
+# set it later via `pnpm set-token` or by editing config.js directly.
+
+if [ -f "$CONFIG_JS" ]; then
+  echo "${BOLD}── Paste your new Strapi 5 API token (or press Enter to skip) ──${RESET}"
+  echo "${DIM}(Tip: keep this terminal open, do steps 1–3 above in another window/browser, then come back here.)${RESET}"
+  echo ""
+  # -r: don't escape backslashes; -p: prompt; we want the input visible since
+  # the user is pasting a long token and a typo is silent otherwise.
+  read -rp "  token: " NEW_TOKEN || NEW_TOKEN=""
+  if [ -n "$NEW_TOKEN" ]; then
+    # Sanity: the token should be a long hex string. Reject if it has
+    # whitespace, single-quotes, or is suspiciously short.
+    if echo "$NEW_TOKEN" | grep -q "[ '\"]"; then
+      warn "Token contains whitespace or quotes — refusing to write. Edit config.js manually."
+    elif [ "${#NEW_TOKEN}" -lt 64 ]; then
+      warn "Token is only ${#NEW_TOKEN} chars (expected ~256). Refusing to write — paste it again via pnpm set-token."
+    else
+      perl -i -pe "s/(process\.env\.STRAPI5_TOKEN \|\| ')[^']*(')/\${1}${NEW_TOKEN}\${2}/g" "$CONFIG_JS"
+      ok "Token written to $CONFIG_JS"
+      echo ""
+      echo "${GREEN}Now you can run:${RESET}"
+      echo "       ${DIM}cd $SCRIPT_DIR${RESET}"
+      echo "       ${DIM}pnpm preflight${RESET}"
+    fi
+  else
+    echo "${DIM}Skipped. Set the token later with:${RESET}"
+    echo "       ${DIM}cd $SCRIPT_DIR && pnpm set-token${RESET}"
+  fi
+  echo ""
+fi

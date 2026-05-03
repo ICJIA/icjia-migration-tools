@@ -153,7 +153,7 @@ async function main() {
   console.log(`  ${CYAN}migration/data/audit-report.md${RESET}           — human-readable parity details`);
   console.log(`  ${CYAN}migration/data/validation-report.json${RESET}    — machine-readable check results`);
   console.log('');
-  console.log(`${GREEN}Strapi 5 admin:${RESET} http://localhost:1337/admin (or whatever port your install uses)`);
+  console.log(`${GREEN}Strapi 5 admin:${RESET} http://localhost:1340/admin (or whatever port your install uses)`);
   console.log('');
 }
 

@@ -8,7 +8,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.9.8 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.9.9 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 of 2,492 records loaded, 478 relation links created, 2,109 of 2,110 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations).
 
@@ -74,7 +74,7 @@ This tool is API-to-API: it reads via GraphQL and direct SQLite, writes via Stra
 pnpm install
 
 # 2. Pick a config profile
-cp config.dev.js config.js          # local Strapi 5 on :1338
+cp config.dev.js config.js          # local Strapi 5 on :1340
 # OR
 cp config.prod.js config.js         # production Strapi 5
 
@@ -116,7 +116,7 @@ pnpm postflight                     # runs preflight + validate + audit + report
 pnpm preflight --skip-strapi5       # skip Strapi 5 checks (before S5 is set up)
 pnpm preflight --json               # JSON-only output (for CI)
 
-# Custom Strapi 5 port (default :1338):
+# Custom Strapi 5 port (default :1340):
 STRAPI5_API_URL=http://localhost:1339 pnpm preflight
 ```
 
@@ -224,7 +224,7 @@ Three config files at the repo root:
 | File | Purpose |
 |---|---|
 | `config.example.js` | Annotated reference. Default fallback when no `config.js` exists. |
-| `config.dev.js` | Local dev profile: remote Strapi 3, local Strapi 5 (`localhost:1338`) |
+| `config.dev.js` | Local dev profile: remote Strapi 3, local Strapi 5 (`localhost:1340`) |
 | `config.prod.js` | Production profile: remote Strapi 3, remote Strapi 5 |
 
 To activate a profile:
@@ -245,8 +245,8 @@ Resolution order: `config.js` → `config.${MIGRATION_ENV}.js` → `config.examp
 | `STRAPI3_API_URL` | `https://agency.icjia-api.cloud` | Strapi 3 REST base (count endpoints, file URLs) |
 | `STRAPI3_TOKEN` | `''` | Optional auth token for Strapi 3 |
 | `STRAPI3_SQLITE_PATH` | `./docs/strapi-3-source/data.db` | Path to in-repo Strapi 3 SQLite snapshot |
-| `STRAPI5_GRAPHQL_URL` | `http://localhost:1338/graphql` | Strapi 5 GraphQL endpoint |
-| `STRAPI5_API_URL` | `http://localhost:1338` | Strapi 5 REST base |
+| `STRAPI5_GRAPHQL_URL` | `http://localhost:1340/graphql` | Strapi 5 GraphQL endpoint |
+| `STRAPI5_API_URL` | `http://localhost:1340` | Strapi 5 REST base |
 | `STRAPI5_TOKEN` | — | **Required** for write phases. Generate in S5 admin → Settings → API Tokens |
 | `STRAPI5_DB_PATH` | `../icjia-public-strapi5/.tmp/data.db` | Strapi 5 SQLite path for timestamp restoration |
 | `STRAPI5_PROJECT_PATH` | `../icjia-public-strapi5` | Strapi 5 project dir for schema copy |
@@ -286,7 +286,7 @@ The fastest, most reliable path:
 
 ```bash
 cd /Volumes/satechi/webdev/icjia-migration-tools
-./install-strapi5.sh                  # local dev (port 1337)
+./install-strapi5.sh                  # local dev (port 1340)
 ./install-strapi5.sh --port=5150      # custom port (e.g., for prod)
 ./install-strapi5.sh --target=/path   # custom directory
 ./install-strapi5.sh --force          # skip the "wipe existing dir" prompt
@@ -332,7 +332,7 @@ npx create-strapi-app@latest icjia-public-strapi5 \
 # 2. Configure port
 # ──────────────────────────────────────────────────────────────────
 cd icjia-public-strapi5
-echo "PORT=1337" >> .env       # or 5150 for prod (see "Custom port" below)
+echo "PORT=1340" >> .env       # or 5150 for prod (see "Custom port" below)
 
 # ──────────────────────────────────────────────────────────────────
 # 3. Install GraphQL plugin (required for Phase 1c verification)
@@ -361,7 +361,7 @@ pnpm develop
 # Ctrl+C, run `pnpm rebuild better-sqlite3 sharp`, then `pnpm develop` again.
 ```
 
-Then in the browser (auto-opens, or visit `http://localhost:1337/admin`):
+Then in the browser (auto-opens, or visit `http://localhost:1340/admin`):
 
 1. **Create the admin user** via the first-launch wizard.
 2. Settings (gear icon) → **Global Settings → API Tokens** → **+ Create new API Token**:
@@ -405,11 +405,11 @@ strapi5: {
 }
 ```
 
-### Custom port (e.g., if prod already has another Strapi on :1337)
+### Custom port (e.g., if prod already has another Strapi on :1340)
 
 Three places to change. All three must agree.
 
-**ICJIA's chosen prod port is `5150`** (since the prod server already has another Strapi on `:1337`). The migration tool talks to `https://v2.agency.icjia-api.cloud` (port 443/HTTPS); nginx forwards to internal `localhost:5150`. From the tool's perspective the port is invisible.
+**ICJIA's chosen prod port is `5150`** (since the prod server already has another Strapi on `:1340`). The migration tool talks to `https://v2.agency.icjia-api.cloud` (port 443/HTTPS); nginx forwards to internal `localhost:5150`. From the tool's perspective the port is invisible.
 
 Examples below use 5150 as the **internal** Strapi 5 port.
 

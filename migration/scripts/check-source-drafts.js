@@ -37,7 +37,7 @@ const RESET = '\x1b[0m';
 
 const config = await loadConfig();
 const sourceDbPath = path.resolve(ROOT, config.strapi3.sqliteDbPath);
-const adminBase = (config.strapi5?.apiUrl || 'http://localhost:1337').replace(/\/+$/, '') + '/admin';
+const adminBase = (config.strapi5?.apiUrl || 'http://localhost:1340').replace(/\/+$/, '') + '/admin';
 
 function quoteIdent(name) {
   if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {

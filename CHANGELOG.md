@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.9] - 2026-05-03
+
+### Changed — default port 1337 → 1340
+
+The local Strapi 5 default port is now **1340** (was 1337). This avoids
+collisions when other Strapi instances are already using 1337/1338 on the
+same machine. Updated:
+
+- `install-strapi5.sh` PORT default
+- `config.dev.js` and `config.example.js` graphqlUrl + apiUrl
+- `migration/lib/graphql-client.js` example
+- `migration/scripts/preflight.js` printed manual-install hint
+- `migration/scripts/migrate-full.js` final admin URL
+- `migration/scripts/check-source-drafts.js` adminBase fallback
+- `deploy/restart.sh` health check URL
+- `README.md` (8 references)
+
+Production port (`5150` behind nginx at `v2.agency.icjia-api.cloud`) is
+unchanged in `config.prod.js`.
+
+### Added — automatic token clearing + interactive token paste in install
+
+`install-strapi5.sh` now wipes any stale `strapi5.token` from `config.js`
+during install (the previous token is invalid against the fresh admin DB
+anyway). Right before exiting, the script prompts:
+
+> Paste your new Strapi 5 API token (or press Enter to skip)
+
+The user keeps the install terminal open, does the browser steps in
+another window (start Strapi 5, create admin, generate token), then
+comes back and pastes. The script validates length + character set and
+writes it to config.js, so the user can immediately run `pnpm preflight`
+without editing any file.
+
+If the prompt is skipped (Enter / Ctrl+C), the same flow is available
+via `pnpm set-token` (a new alias for `migration/scripts/set-strapi5-token.js`).
+Both paths refuse short or whitespace-containing input.
+
+### Added — Phase 4 load progress indicator
+
+`04-load.js` now prints in-place progress every 25 records during long
+loads (e.g., publication's 1,139 records used to look stuck for ~2.5
+minutes). Format: `<type> <i>/<n> (<created>, <skipped>, <failed>)`.
+Per-type ✓ summary line is unchanged.
+
 ## [0.9.8] - 2026-05-03
 
 ### Added — `update.sh` symlinked into the Strapi 5 install dir

@@ -358,7 +358,19 @@ async function main() {
       if ((i + 1) % 50 === 0 || i === records.length - 1) {
         await fs.writeFile(mapPath, JSON.stringify(map, null, 2));
       }
+
+      // Live progress (overwrite-in-place via \r) so the user sees that
+      // long types like publication (1139 records, ~2.5 min) aren't stuck.
+      // Final per-type ✓ summary line is printed below the loop.
+      if ((i + 1) % 25 === 0 || i === records.length - 1) {
+        const tag = `${stats.created} created`
+          + (stats.skipped > 0 ? `, ${stats.skipped} skipped` : '')
+          + (stats.failed > 0 ? `, ${stats.failed} failed` : '');
+        process.stdout.write(`  ${DIM}${ct.name.padEnd(15)} ${i + 1}/${records.length} (${tag})${RESET}\r`);
+      }
     }
+    // Clear the progress line so the per-type ✓ summary lands cleanly.
+    process.stdout.write(' '.repeat(120) + '\r');
 
     await fs.writeFile(mapPath, JSON.stringify(map, null, 2));
 
