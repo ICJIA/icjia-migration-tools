@@ -44,18 +44,35 @@ const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
 import { loadConfig } from '../lib/load-config.js';
+import {
+  requireEnv,
+  assertSafePath,
+  escapeShellArg,
+} from '../lib/security.js';
 const config = await loadConfig();
 
 // ── Configuration ───────────────────────────────────────────────────
 
 /**
- * SSH connection details. Override via environment variables if needed.
+ * SSH connection details. All three values are required; no production
+ * defaults are baked in. Reset is a destructive operation against a remote
+ * server, so we refuse to fall through to any "best guess" target.
+ *
  * @type {{ host: string, user: string, strapiDir: string }}
  */
 const SSH = {
-  host: process.env.SSH_HOST || '137.184.64.249',
-  user: process.env.SSH_USER || 'forge',
-  strapiDir: config.strapi5ProjectPath || '/home/forge/v2.hub.icjia-api.cloud/v2hub',
+  host: assertSafePath(
+    requireEnv('SSH_HOST', { hint: 'remote Strapi 5 host (e.g., v2.example.com)' }),
+    'SSH_HOST',
+  ),
+  user: assertSafePath(
+    requireEnv('SSH_USER', { hint: 'SSH login user on the remote (e.g., forge)' }),
+    'SSH_USER',
+  ),
+  strapiDir: assertSafePath(
+    process.env.SSH_STRAPI_DIR || config.strapi5ProjectPath || '',
+    'SSH_STRAPI_DIR / strapi5ProjectPath',
+  ),
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -81,7 +98,9 @@ function run(cmd) {
  * @returns {string} Command stdout
  */
 function ssh(cmd) {
-  return run(`ssh ${SSH.user}@${SSH.host} "${cmd.replace(/"/g, '\\"')}"`);
+  // user/host validated by assertSafePath; remote command single-quoted
+  // so embedded shell metacharacters are not re-interpreted locally.
+  return run(`ssh ${SSH.user}@${SSH.host} ${escapeShellArg(cmd)}`);
 }
 
 /**
@@ -90,7 +109,9 @@ function ssh(cmd) {
  * @param {string} remotePath - Remote destination
  */
 function scp(localPath, remotePath) {
-  run(`scp -r "${localPath}" ${SSH.user}@${SSH.host}:${remotePath}`);
+  run(
+    `scp -r ${escapeShellArg(localPath)} ${SSH.user}@${SSH.host}:${escapeShellArg(remotePath)}`,
+  );
 }
 
 /**

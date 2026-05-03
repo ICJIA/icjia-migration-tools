@@ -1,6 +1,6 @@
 {
   "name": "icjia-public-cms-migration-2026",
-  "version": "0.9.18",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "description": "API-to-API migration tool for the ICJIA public website: Strapi 3 (SQLite) → Strapi 5 (SQLite). Forked from icjia-hub-migration-tools.",
@@ -40,7 +40,9 @@
     "fix-image-refs": "node migration/scripts/04d-fix-image-refs.js",
     "fix-tables": "node migration/scripts/fix-tables.js",
     "set-strapi5": "node migration/scripts/set-strapi5-url.js",
-    "reset": "node migration/scripts/reset-strapi5.js"
+    "reset": "node migration/scripts/reset-strapi5.js",
+    "test:security": "node migration/tests/security.test.js",
+    "test": "node migration/tests/security.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",

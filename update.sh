@@ -131,12 +131,18 @@ The migration tool expects a Strapi 5 project at this path. Either:
   ok "Local Strapi 5 install present: $S5_PATH"
 fi
 
-# Run preflight to verify reachability + token validity
-if ! pnpm preflight --skip-checklist > /tmp/update-preflight.log 2>&1; then
+# Run preflight to verify reachability + token validity. Use a per-user
+# private temp file (mode 0600) instead of a world-readable /tmp log so the
+# preflight output (URLs, error bodies, etc.) isn't readable by other users
+# on the machine.
+PREFLIGHT_LOG=$(mktemp -t update-preflight.XXXXXXXX) || fail "mktemp failed"
+chmod 600 "$PREFLIGHT_LOG"
+trap 'rm -f "$PREFLIGHT_LOG"' EXIT
+if ! pnpm preflight --skip-checklist > "$PREFLIGHT_LOG" 2>&1; then
   echo ""
   echo "${RED}Preflight FAILED.${RESET} Output:"
   echo ""
-  tail -40 /tmp/update-preflight.log
+  tail -40 "$PREFLIGHT_LOG"
   echo ""
   fail "Cannot reach $TARGET Strapi 5. Fix the failures above and re-run.
 

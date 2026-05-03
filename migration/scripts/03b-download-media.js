@@ -30,6 +30,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { loadConfig } from '../lib/load-config.js';
+import { assertSafeUrl } from '../lib/security.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -129,7 +130,17 @@ async function main() {
     const f = queue[i];
     const fileName = `${f.hash}${f.ext}`;
     const destPath = path.join(filesDir, fileName);
-    const sourceUrl = `${baseUrl}${f.sourceUrl}`;
+    let sourceUrl;
+    try {
+      // Reject absolute / protocol-relative URLs in the manifest — the source
+      // DB is semi-trusted and a poisoned `sourceUrl` field could redirect
+      // downloads to an internal service (SSRF).
+      sourceUrl = assertSafeUrl(f.sourceUrl, baseUrl).toString();
+    } catch (err) {
+      failed++;
+      status[f.hash] = { status: 'failed', error: `Unsafe URL rejected: ${err.message}`, sourceUrl: f.sourceUrl };
+      continue;
+    }
 
     // Idempotent skip — file already on disk with matching size (within 1KB tolerance)
     if (existsSync(destPath)) {

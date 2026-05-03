@@ -12,6 +12,8 @@
  *   const result = await client.query('{ articles { id title } }');
  */
 
+import { isHttpsOrLocalhost } from './security.js';
+
 /**
  * A GraphQL client that wraps native `fetch` with auth, timeout, and error handling.
  */
@@ -27,10 +29,23 @@ export class GraphQLClient {
     this.token = options.token || null;
     this.timeoutMs = options.timeoutMs || 30000;
 
-    // Warn if sending a token over plaintext HTTP to a non-localhost URL
-    if (this.token && endpoint.startsWith('http://') && !endpoint.includes('localhost') && !endpoint.includes('127.0.0.1')) {
-      console.warn(`\x1b[33mWARNING: Sending API token over plaintext HTTP to ${endpoint}\x1b[0m`);
-      console.warn(`\x1b[33mUse HTTPS in production to prevent token interception.\x1b[0m`);
+    // Refuse to send a bearer token over plaintext HTTP to a non-localhost URL.
+    // http://localhost, http://127.0.0.1, http://::1, http://0.0.0.0 are
+    // explicitly allowed (dev workflow). Otherwise: HTTPS or set
+    // ALLOW_INSECURE_HTTP=1 to override.
+    if (this.token && !isHttpsOrLocalhost(endpoint)) {
+      if (process.env.ALLOW_INSECURE_HTTP === '1') {
+        console.warn(
+          `\x1b[33mWARNING: Sending API token over plaintext HTTP to ${endpoint} ` +
+            `(ALLOW_INSECURE_HTTP=1).\x1b[0m`,
+        );
+      } else {
+        throw new Error(
+          `Refusing to send API token over plaintext HTTP to ${endpoint}.\n` +
+            `  Allowed without HTTPS: http://localhost, http://127.0.0.1, http://::1, http://0.0.0.0.\n` +
+            `  Otherwise use HTTPS, or set ALLOW_INSECURE_HTTP=1 to override (not for production).`,
+        );
+      }
     }
   }
 

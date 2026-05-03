@@ -4,6 +4,132 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-05-03
+
+### Security — red/blue team audit + fixes + regression suite
+
+Performed a full red/blue team security audit on the migration tool and
+patched every CRITICAL / HIGH / MEDIUM finding. Added a runnable test
+suite so regressions surface immediately.
+
+**Audit run by:** automated red-team review of all `migration/` JS,
+shell scripts, config files, and `.gitignore`. Targets: hardcoded
+secrets, command injection, path traversal, SSRF, SQL injection, log
+leakage, TLS/HTTP handling, file permissions, predictable temp paths.
+
+#### Findings & fixes
+
+- **CRITICAL — token-shaped values in plaintext config.** Local
+  `config.js` (gitignored) was holding a long Strapi 5 API token in a
+  string literal. Added a runtime audit in `migration/lib/load-config.js`:
+  any loaded config value matching a hex/base64 secret shape now triggers
+  a `SECURITY WARNING` at process start, with guidance to move it to
+  `process.env.<NAME>`. Suppress with `MIGRATION_SUPPRESS_SECRET_WARNINGS=1`.
+
+- **HIGH — SSRF in Phase 3b media download.** `03b-download-media.js`
+  concatenated `f.sourceUrl` (from the Strapi 3 manifest) onto
+  `config.strapi3.apiUrl` without validation, so a poisoned source DB
+  could redirect downloads to an internal service. Replaced with
+  `assertSafeUrl()` from the new `migration/lib/security.js`: rejects
+  absolute URLs, protocol-relative (`//evil/…`) URLs, and any host that
+  doesn't match the configured base.
+
+- **HIGH — SQL identifier interpolation in remote timestamp script.**
+  The script generated for `04c-fix-timestamps-remote.js` built
+  `UPDATE <table> SET <col> = ? WHERE <docIdCol> = ?` by string
+  concatenation. Embedded a small `quoteIdent()` allowlist (mirroring
+  `sqlite-reader.js`) into the generated remote script — table and column
+  names are now validated and double-quoted before reaching SQLite.
+
+- **HIGH — SSH command injection via interpolated paths.** Both
+  `reset-remote.js` and `04c-fix-timestamps-remote.js` did
+  `ssh user@host "${cmd.replace(/"/g, '\\"')}"`, which only escaped
+  double-quotes. Replaced with single-quote shell escaping
+  (`escapeShellArg()`), and validate `SSH_HOST` / `SSH_USER` /
+  `SSH_STRAPI_DIR` / `SSH_DB_RELATIVE_PATH` via `assertSafePath()` at
+  module load (rejects spaces, `$`, backticks, semicolons, `..`, etc.).
+
+- **HIGH — predictable `/tmp` directory on remote.** The remote
+  timestamp restore used
+  `REMOTE_TMP = /tmp/migration-timestamps-${Date.now()}` — predictable
+  enough that another local user could pre-create the dir to win a
+  race. Replaced with `mktemp -d` on the remote, plus explicit
+  `chmod 700`. Added a `try / finally` so cleanup runs even on script
+  failure.
+
+- **HIGH — hardcoded production-IP fallbacks.** `reset-remote.js:56` and
+  `04c-fix-timestamps-remote.js:49` had
+  `process.env.SSH_HOST || '137.184.64.249'` — a developer running
+  locally without env vars could hit the wrong target. Removed the
+  fallback. `SSH_HOST` and `SSH_USER` are now required (clear error if
+  unset). `SSH_STRAPI_DIR` is now an explicit env var (still falls back
+  to `config.strapi5ProjectPath`, but validated for safe characters).
+
+- **MEDIUM — token over plaintext HTTP became a warning, not a guard.**
+  Both `rest-client.js` and `graphql-client.js` printed a yellow warning
+  but still sent the bearer token down the wire. Now: throws unless the
+  URL is `https://…` or one of the localhost forms (`localhost`,
+  `127.0.0.1`, `::1`, `0.0.0.0`). The dev workflow
+  (`http://localhost:1340` + a real token) is explicitly preserved.
+  Override: `ALLOW_INSECURE_HTTP=1` (developer escape hatch, prints a
+  warning, never recommended for prod).
+
+- **MEDIUM — file permissions on `migration/data/` and `migration/output/`.**
+  ID maps and extracted records were written with the default umask
+  (typically `0022` = group/other readable). `migration/lib/load-config.js`
+  and `migrate-full.js` now call `process.umask(0o077)` at startup so all
+  subsequent writes are owner-only by default. Override with
+  `MIGRATION_DISABLE_UMASK=1`.
+
+- **MEDIUM — world-readable preflight log.** `update.sh` redirected
+  preflight output to `/tmp/update-preflight.log` (world-readable).
+  Switched to `mktemp -t update-preflight.XXXXXXXX` + `chmod 600` + a
+  `trap 'rm -f' EXIT` so the log is owner-only and disappears on exit.
+
+#### New code
+
+- `migration/lib/security.js` — centralized validators and helpers:
+  `requireEnv()`, `assertSafePath()`, `assertSafeIdent()`, `quoteIdent()`,
+  `assertSafeUrl()`, `escapeShellArg()`, `isLikelySecret()`,
+  `isHttpsOrLocalhost()`. All pure functions, no I/O, no logging side
+  effects. Reusable across scripts; throws on failure ("loud refusal").
+
+- `migration/tests/security.test.js` — runnable manual regression suite.
+  46 tests across five sections (primitives, SSRF, HTTP-token guard,
+  committed-tree hygiene, file permissions). Every fix above has at
+  least one matching test. Self-contained: no real Strapi instance,
+  no network calls.
+
+  ```bash
+  pnpm test:security        # run everything
+  pnpm test:security --only=SSRF       # filter (note: pass through pnpm: pnpm test:security -- --only=SSRF)
+  node migration/tests/security.test.js --only=SSH
+  ```
+
+  Exit code 0 on pass, 1 on any failure.
+
+#### Behavior changes that may surprise
+
+- Running `node migration/scripts/reset-remote.js` or
+  `04c-fix-timestamps-remote.js` without `SSH_HOST` and `SSH_USER` set
+  now exits non-zero with a clear error. Set them explicitly:
+  `export SSH_HOST=v2.example.com; export SSH_USER=forge`.
+- A `RestClient` or `GraphQLClient` constructed with a token AND a
+  plaintext-HTTP non-localhost URL now throws at construction time
+  (previously printed a warning and proceeded).
+- `migration/data/` files written under v0.10.0 are owner-only
+  (`0o600`/`0o700`). Existing files retain their old modes — re-run with
+  `pnpm migrate:clean && pnpm migrate:full` to normalize, or
+  `chmod -R go-rwx migration/data` / `chmod -R go-rwx migration/output`.
+
+#### What was *not* changed
+
+- The hardcoded `66b1c996…` ADMIN_JWT_SECRET fallback in
+  `docs/strapi-3-source/config/server.js` is left as-is. That entire
+  directory is gitignored as of 0.9.x and was scrubbed from git history
+  in a previous commit. The file documents the Strapi 3 source's
+  behavior, not the migration tool's; it's a reference, not a runtime.
+
 ## [0.9.18] - 2026-05-03
 
 ### Added — final-run postflight summary in README

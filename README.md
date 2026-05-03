@@ -8,9 +8,11 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.9.18 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.10.0 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 records loaded, 478 relation links created, 2,109 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations) — perfect parity against the Strapi 3 source after pre-cutover data cleanup.
+
+**Security audit:** Red/blue team review run **2026-05-03** (v0.10.0). Every CRITICAL, HIGH, and MEDIUM finding fixed; 46-test regression suite ships in `migration/tests/security.test.js` (`pnpm test:security`). See [Security](#security) and [CHANGELOG.md → 0.10.0](CHANGELOG.md#0100---2026-05-03).
 
 ---
 
@@ -31,6 +33,7 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 - [Deploying to production](#deploying-to-production)
 - [Repository layout](#repository-layout)
 - [Source data reference](#source-data-reference)
+- [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Migration plan](#migration-plan)
 - [License](#license)
@@ -969,6 +972,69 @@ sqlite3 docs/strapi-3-source/data.db "SELECT id, name, hash, ext, size FROM uplo
 # Check dominance — which side's ID column comes first?
 sqlite3 docs/strapi-3-source/data.db "PRAGMA table_info(events_tags__tags_events)"
 ```
+
+---
+
+## Security
+
+A red/blue team audit was run on **2026-05-03** (v0.10.0). Every CRITICAL,
+HIGH, and MEDIUM finding was fixed in the same release; see
+[CHANGELOG.md → 0.10.0](CHANGELOG.md#0100---2026-05-03) for the full list
+with file/line references.
+
+### Hardening summary
+
+| Area | Protection |
+|---|---|
+| **Secrets** | `migration/lib/load-config.js` scans every loaded config and emits a `SECURITY WARNING` if any value matches a hex/base64 secret shape. Suppress with `MIGRATION_SUPPRESS_SECRET_WARNINGS=1`. |
+| **HTTP + bearer token** | `RestClient` and `GraphQLClient` throw at construction if the URL is `http://` to a non-localhost host. Allowed without HTTPS: `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`. Override: `ALLOW_INSECURE_HTTP=1`. |
+| **SSRF in media downloads** | `assertSafeUrl()` rejects absolute URLs and protocol-relative paths in the upload manifest before fetching. Only relative `/uploads/...` paths under the configured base host are downloaded. |
+| **SSH command construction** | All paths/users/hosts are validated by `assertSafePath()` (allowlist regex) at module load. Remote commands are single-quote-shell-escaped (`escapeShellArg()`) before reaching `ssh`/`scp`. |
+| **SQL identifiers** | Table and column names that flow into SQL strings (locally and in the generated remote timestamp script) go through `quoteIdent()` — same allowlist used in `migration/lib/sqlite-reader.js`. |
+| **Predictable temp dirs** | `04c-fix-timestamps-remote.js` uses `mktemp -d` + `chmod 700` on the remote, plus `try/finally` cleanup. `update.sh` uses `mktemp` + `trap rm EXIT` for the preflight log. |
+| **File permissions** | `process.umask(0o077)` is set at startup so `migration/data/` and `migration/output/` are owner-only. Override: `MIGRATION_DISABLE_UMASK=1`. |
+| **Required SSH env vars** | `SSH_HOST` and `SSH_USER` are required for `reset-remote.js` and `04c-fix-timestamps-remote.js`; no production-IP fallback exists. |
+
+### Running the security regression suite
+
+```bash
+pnpm test:security
+```
+
+46 tests, ~1 second, zero external dependencies (no Strapi instance, no
+network). The suite covers every fix from the audit — primitives in
+`security.js`, the SSRF guard, the HTTP-token guard for both clients,
+committed-tree hygiene (no hardcoded prod IPs, no token-shaped strings
+in committed config templates, `.gitignore` coverage), and the umask
+behavior.
+
+Filter individual tests:
+
+```bash
+node migration/tests/security.test.js --only=SSRF
+node migration/tests/security.test.js --only=SSH
+node migration/tests/security.test.js --only=localhost
+```
+
+A passing run prints `All security tests passed.` and exits 0; any
+failure exits 1 with the failing test names listed.
+
+### Recommended dev hygiene
+
+- Keep `config.js` gitignored (`/config.js` already in `.gitignore`). Put
+  tokens in `process.env.STRAPI5_TOKEN` (and similar) rather than in the
+  file. The `auditLoadedConfig()` warning will tell you if you forget.
+- Use `config.dev.js` and `config.prod.js` as committed templates — they
+  must stay clean (no token-shaped fallbacks). The `D. Committed-tree
+  hygiene` block in the test suite proves this.
+- Set SSH env vars explicitly per session:
+
+  ```bash
+  export SSH_HOST=v2.example.com SSH_USER=forge
+  export SSH_STRAPI_DIR=/home/forge/v2.example.com/strapi5
+  ```
+
+  No defaults are baked in. Running without them is a clear-error fast-fail.
 
 ---
 

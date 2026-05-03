@@ -32,6 +32,12 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 
+// Restrict default file/dir permissions to the running user only.
+// Override with MIGRATION_DISABLE_UMASK=1 if a workflow needs the default.
+if (process.env.MIGRATION_DISABLE_UMASK !== '1') {
+  process.umask(0o077);
+}
+
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';

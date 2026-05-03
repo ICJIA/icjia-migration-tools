@@ -19,6 +19,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 
+import { isHttpsOrLocalhost } from './security.js';
+
 /**
  * A REST client that wraps native `fetch` with auth, timeout, and error handling.
  */
@@ -37,19 +39,23 @@ export class RestClient {
     this.token = options.token || null;
     this.timeoutMs = options.timeoutMs || 30000;
 
-    // Warn if sending a token over plaintext HTTP to a non-localhost URL
-    if (
-      this.token &&
-      baseUrl.startsWith('http://') &&
-      !baseUrl.includes('localhost') &&
-      !baseUrl.includes('127.0.0.1')
-    ) {
-      console.warn(
-        `\x1b[33mWARNING: Sending API token over plaintext HTTP to ${baseUrl}\x1b[0m`,
-      );
-      console.warn(
-        `\x1b[33mUse HTTPS in production to prevent token interception.\x1b[0m`,
-      );
+    // Refuse to send a bearer token over plaintext HTTP to a non-localhost
+    // host. http://localhost, http://127.0.0.1, http://::1, and http://0.0.0.0
+    // are explicitly allowed (dev workflow). Anything else: HTTPS or set
+    // ALLOW_INSECURE_HTTP=1 to override.
+    if (this.token && !isHttpsOrLocalhost(baseUrl)) {
+      if (process.env.ALLOW_INSECURE_HTTP === '1') {
+        console.warn(
+          `\x1b[33mWARNING: Sending API token over plaintext HTTP to ${baseUrl} ` +
+            `(ALLOW_INSECURE_HTTP=1).\x1b[0m`,
+        );
+      } else {
+        throw new Error(
+          `Refusing to send API token over plaintext HTTP to ${baseUrl}.\n` +
+            `  Allowed without HTTPS: http://localhost, http://127.0.0.1, http://::1, http://0.0.0.0.\n` +
+            `  Otherwise use HTTPS, or set ALLOW_INSECURE_HTTP=1 to override (not for production).`,
+        );
+      }
     }
   }
 
