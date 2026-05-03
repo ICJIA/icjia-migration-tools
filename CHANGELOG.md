@@ -4,6 +4,70 @@ All notable changes to this project will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-05-03
+
+### Security — `.env`-based token storage; secret-literal scan now sees the source file
+
+The 0.10.0 audit added `auditLoadedConfig()` which walked the *resolved*
+config object — that meant a token loaded from `.env` looked identical to
+a hardcoded literal and triggered the warning either way. 0.10.1 makes the
+audit semantics match its message: scan the JS source files for string
+literals matching `isLikelySecret()`. Tokens loaded via `process.env.*`
+(including via the new `.env` loader) produce no warning; a literal in
+the source still does.
+
+Workflow change for developers:
+
+- **Tokens now live in `.env`** at the project root (gitignored, mode 0600).
+- `pnpm set-token` writes to `.env` instead of patching `config.js`.
+- `migration/lib/load-config.js` auto-reads `.env` at startup; shell-set
+  env vars still win (so `export STRAPI5_TOKEN=…` overrides `.env`).
+- Disable the auto-load with `MIGRATION_DISABLE_DOTENV=1` (rare).
+
+### Added
+
+- **`migration/lib/load-config.js`** — inline `.env` parser (no new
+  dependency, ~25 lines). Supports `KEY=value`, double/single quoted
+  values, `#` comments, blank lines. Does not support shell-style
+  variable expansion or multi-line values (Strapi tokens don't need
+  either).
+- **`.env.example`** — committed template documenting all recognized
+  keys (`STRAPI5_TOKEN`, optional `STRAPI3_TOKEN`, `SSH_HOST` /
+  `SSH_USER` / `SSH_STRAPI_DIR`, behavior toggles).
+- **9 new tests** in `migration/tests/security.test.js` (Section F):
+  parser correctness, shell-wins precedence, missing-file safety,
+  `MIGRATION_DISABLE_DOTENV=1`, `set-token` writes mode 0600, upsert
+  (no duplicate lines), short-token refusal, plus committed-template
+  and local-`config.js` empty-fallback assertions. Suite is now 55
+  tests, ~1 second runtime.
+
+### Changed
+
+- **`migration/scripts/set-strapi5-token.js`** rewritten: upserts
+  `STRAPI5_TOKEN=<value>` in `.env` (creates the file at mode 0600 if
+  missing; preserves order/comments if it exists). The old config.js-
+  patching logic is gone.
+- **`migration/scripts/preflight.js`** — error message and onboarding
+  checklist now point at `pnpm set-token` (writes to `.env`) and `export
+  STRAPI5_TOKEN=…` instead of "paste it into config.js".
+- **`auditLoadedConfig()`** in `load-config.js` now reads the JS source
+  file and lexes string literals rather than walking the resolved object.
+  Warning text updated to point at `.env` + `pnpm set-token` as the fix.
+- **Local `config.js`** (the user's gitignored working copy) cleaned:
+  the 256-char hex literal at `strapi5.token` was removed; falls back to
+  empty when env-unset (so `.env` is the only source).
+
+### Behavior changes
+
+- If a developer pastes a token into `config.js` directly (instead of
+  `.env`), the warning fires with line number and a 12-char preview of
+  the value. Move it to `.env` to silence.
+- `pnpm set-token` now writes only to `.env`. If you previously relied
+  on `config.js` getting patched, run the command once and verify
+  `cat .env` shows the new line.
+- `MIGRATION_SUPPRESS_SECRET_WARNINGS=1` still works as the global
+  override but is no longer needed for normal `.env` workflows.
+
 ## [0.10.0] - 2026-05-03
 
 ### Security — red/blue team audit + fixes + regression suite

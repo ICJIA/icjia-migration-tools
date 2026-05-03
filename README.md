@@ -8,11 +8,11 @@ API-to-API migration tool for moving the ICJIA public website (`agency.icjia-api
 **Source:** Strapi 3 SQLite (`https://agency.icjia-api.cloud`)
 **Target:** Strapi 5 SQLite
 **Architecture:** Forked from the sibling tool [`icjia-hub-migration-tools`](https://github.com/ICJIA/icjia-hub-migration-tools) which migrated ResearchHub from Strapi 3 MongoDB → Strapi 5 SQLite (March 2026)
-**Version:** 0.10.0 — see [CHANGELOG.md](CHANGELOG.md)
+**Version:** 0.10.1 — see [CHANGELOG.md](CHANGELOG.md)
 
 **Validated end-to-end:** 2,491 records loaded, 478 relation links created, 2,109 media files re-uploaded, 13,355 field comparisons with **0 ERROR-category findings** (13,259 OK + 96 EXPECTED transformations) — perfect parity against the Strapi 3 source after pre-cutover data cleanup.
 
-**Security audit:** Red/blue team review run **2026-05-03** (v0.10.0). Every CRITICAL, HIGH, and MEDIUM finding fixed; 46-test regression suite ships in `migration/tests/security.test.js` (`pnpm test:security`). See [Security](#security) and [CHANGELOG.md → 0.10.0](CHANGELOG.md#0100---2026-05-03).
+**Security audit:** Red/blue team review run **2026-05-03** (v0.10.0); v0.10.1 added `.env`-based token storage so secrets never sit in any JS file. Every CRITICAL, HIGH, and MEDIUM finding is fixed; 55-test regression suite ships in `migration/tests/security.test.js` (`pnpm test:security`). See [Security](#security) and [CHANGELOG.md → 0.10.1](CHANGELOG.md#0101---2026-05-03).
 
 ---
 
@@ -986,7 +986,7 @@ with file/line references.
 
 | Area | Protection |
 |---|---|
-| **Secrets** | `migration/lib/load-config.js` scans every loaded config and emits a `SECURITY WARNING` if any value matches a hex/base64 secret shape. Suppress with `MIGRATION_SUPPRESS_SECRET_WARNINGS=1`. |
+| **Secrets** | Tokens live in `.env` (gitignored, mode 0600). `migration/lib/load-config.js` auto-loads `.env` at startup, then lexes the JS config sources for string literals matching a hex/base64 secret shape — emits `SECURITY WARNING` only if a literal sits in JS, never for values loaded from `.env` or `process.env`. `pnpm set-token` writes/upserts the token in `.env`. Override the auto-load with `MIGRATION_DISABLE_DOTENV=1`; suppress the warning with `MIGRATION_SUPPRESS_SECRET_WARNINGS=1`. |
 | **HTTP + bearer token** | `RestClient` and `GraphQLClient` throw at construction if the URL is `http://` to a non-localhost host. Allowed without HTTPS: `localhost`, `127.0.0.1`, `::1`, `0.0.0.0`. Override: `ALLOW_INSECURE_HTTP=1`. |
 | **SSRF in media downloads** | `assertSafeUrl()` rejects absolute URLs and protocol-relative paths in the upload manifest before fetching. Only relative `/uploads/...` paths under the configured base host are downloaded. |
 | **SSH command construction** | All paths/users/hosts are validated by `assertSafePath()` (allowlist regex) at module load. Remote commands are single-quote-shell-escaped (`escapeShellArg()`) before reaching `ssh`/`scp`. |

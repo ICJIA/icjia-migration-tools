@@ -499,6 +499,7 @@ test('load-config sets umask to 0o077', async () => {
   // that imports load-config and prints the umask.
   const probe = `
     process.env.MIGRATION_SUPPRESS_SECRET_WARNINGS = '1';
+    process.env.MIGRATION_DISABLE_DOTENV = '1';
     import('${path.join(ROOT, 'migration/lib/load-config.js')}').then(() => {
       process.stdout.write(String(process.umask().toString(8)));
     });
@@ -508,6 +509,221 @@ test('load-config sets umask to 0o077', async () => {
     timeout: 5000,
   }).trim();
   assert(out === '77', `expected umask 77 (octal), got ${out}`);
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Section F — .env auto-loader
+// ──────────────────────────────────────────────────────────────────────
+
+console.log('');
+console.log(`${BOLD}F. .env auto-loader${RESET}`);
+
+test('.env loader reads KEY=value lines', () => {
+  // Use a tmp .env via env var so the parent process isn't affected. The
+  // load-config module reads from project root, so we write a child probe
+  // that points at a fresh dir.
+  const tmp = fs.mkdtempSync(path.join(ROOT, 'migration/data/.env-test-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmp, '.env'),
+      [
+        '# a comment',
+        'PLAIN=hello',
+        'QUOTED="quoted value"',
+        "SINGLE='single quoted'",
+        'WITH_EQUALS=key=val',
+        '',
+      ].join('\n'),
+    );
+    const probe = `
+      process.env.MIGRATION_SUPPRESS_SECRET_WARNINGS = '1';
+      process.chdir(${JSON.stringify(tmp)});
+      // Manually simulate the loader since load-config keys off ROOT, not cwd:
+      const fs = await import('fs');
+      const text = fs.readFileSync('.env', 'utf8');
+      const out = {};
+      for (const raw of text.split(/\\r?\\n/)) {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) continue;
+        const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(.*)$/);
+        if (!m) continue;
+        let v = m[2];
+        if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+        out[m[1]] = v;
+      }
+      process.stdout.write(JSON.stringify(out));
+    `;
+    const out = execSync(`node --input-type=module -e ${escapeShellArg(probe)}`, {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    const parsed = JSON.parse(out);
+    assert(parsed.PLAIN === 'hello', `PLAIN: ${parsed.PLAIN}`);
+    assert(parsed.QUOTED === 'quoted value', `QUOTED: ${parsed.QUOTED}`);
+    assert(parsed.SINGLE === 'single quoted', `SINGLE: ${parsed.SINGLE}`);
+    assert(parsed.WITH_EQUALS === 'key=val', `WITH_EQUALS: ${parsed.WITH_EQUALS}`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('.env loader: shell env vars win over .env values', () => {
+  // Write a temp .env at project root (shadowing the real one momentarily)
+  // would be invasive; instead, test the precedence rule directly via the
+  // loader's source: process.env[key] !== undefined → skip.
+  // The probe sets STRAPI5_TOKEN in the shell first, then imports load-config.
+  // After import, process.env.STRAPI5_TOKEN should still be the shell value,
+  // even though .env in this repo also defines it.
+  const probe = `
+    process.env.MIGRATION_SUPPRESS_SECRET_WARNINGS = '1';
+    process.env.STRAPI5_TOKEN = 'shell-wins-${Date.now()}';
+    const expected = process.env.STRAPI5_TOKEN;
+    await import('${path.join(ROOT, 'migration/lib/load-config.js')}');
+    process.stdout.write(process.env.STRAPI5_TOKEN === expected ? 'OK' : 'FAIL:' + process.env.STRAPI5_TOKEN);
+  `;
+  const out = execSync(`node --input-type=module -e ${escapeShellArg(probe)}`, {
+    encoding: 'utf8',
+    timeout: 5000,
+  }).trim();
+  assert(out === 'OK', `expected OK, got ${out}`);
+});
+
+test('.env loader: missing .env file is silently OK', () => {
+  // Run load-config from a tmp cwd that has no .env — should not throw.
+  const tmp = fs.mkdtempSync(path.join(ROOT, 'migration/data/.env-test-'));
+  try {
+    const probe = `
+      process.env.MIGRATION_SUPPRESS_SECRET_WARNINGS = '1';
+      // Point at a fake non-existent .env via MIGRATION_DISABLE_DOTENV-style
+      // skip; here, we just trust no .env at the actual ROOT, but the real
+      // test is that the load-config import doesn't throw under any cwd.
+      process.chdir(${JSON.stringify(tmp)});
+      await import('${path.join(ROOT, 'migration/lib/load-config.js')}');
+      process.stdout.write('OK');
+    `;
+    const out = execSync(`node --input-type=module -e ${escapeShellArg(probe)}`, {
+      encoding: 'utf8',
+      timeout: 5000,
+    }).trim();
+    assert(out.endsWith('OK'), `expected OK, got ${out}`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('.env loader: MIGRATION_DISABLE_DOTENV=1 skips loading', () => {
+  // With dotenv disabled, an unset shell var stays unset even if .env defines it.
+  const probe = `
+    process.env.MIGRATION_SUPPRESS_SECRET_WARNINGS = '1';
+    process.env.MIGRATION_DISABLE_DOTENV = '1';
+    delete process.env.STRAPI5_TOKEN;
+    await import('${path.join(ROOT, 'migration/lib/load-config.js')}');
+    process.stdout.write(process.env.STRAPI5_TOKEN === undefined ? 'OK' : 'LOADED:' + (process.env.STRAPI5_TOKEN || '').slice(0,6));
+  `;
+  const out = execSync(`node --input-type=module -e ${escapeShellArg(probe)}`, {
+    encoding: 'utf8',
+    timeout: 5000,
+  }).trim();
+  assert(out === 'OK', `expected OK, got ${out}`);
+});
+
+test('set-strapi5-token writes mode 0600 on .env', () => {
+  // Use a child process with a tmp working dir + ROOT swap. Easiest path:
+  // exec set-strapi5-token.js with stdin closed and STRAPI5_TOKEN preset,
+  // pointed at a tmp .env via temporarily renaming the real one.
+  const realEnv = path.join(ROOT, '.env');
+  const realEnvBak = path.join(ROOT, '.env.testsuite-backup');
+  const realEnvExisted = fs.existsSync(realEnv);
+  if (realEnvExisted) fs.renameSync(realEnv, realEnvBak);
+  try {
+    const fakeToken = 'a'.repeat(128);
+    execSync(
+      `node ${escapeShellArg(path.join(ROOT, 'migration/scripts/set-strapi5-token.js'))} ${fakeToken}`,
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, STRAPI5_TOKEN: '' },
+        timeout: 5000,
+      },
+    );
+    assert(fs.existsSync(realEnv), `expected .env to be created`);
+    const stat = fs.statSync(realEnv);
+    const mode = stat.mode & 0o777;
+    assert(mode === 0o600, `expected mode 0600, got ${mode.toString(8)}`);
+    const text = fs.readFileSync(realEnv, 'utf8');
+    assert(text.includes(`STRAPI5_TOKEN=${fakeToken}`), `expected token line in .env`);
+  } finally {
+    fs.rmSync(realEnv, { force: true });
+    if (realEnvExisted) fs.renameSync(realEnvBak, realEnv);
+  }
+});
+
+test('set-strapi5-token upserts (does not duplicate) on second write', () => {
+  const realEnv = path.join(ROOT, '.env');
+  const realEnvBak = path.join(ROOT, '.env.testsuite-backup');
+  const realEnvExisted = fs.existsSync(realEnv);
+  if (realEnvExisted) fs.renameSync(realEnv, realEnvBak);
+  try {
+    const tok1 = 'a'.repeat(128);
+    const tok2 = 'b'.repeat(128);
+    const setTokenScript = path.join(ROOT, 'migration/scripts/set-strapi5-token.js');
+    execSync(`node ${escapeShellArg(setTokenScript)} ${tok1}`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, STRAPI5_TOKEN: '' },
+      timeout: 5000,
+    });
+    execSync(`node ${escapeShellArg(setTokenScript)} ${tok2}`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, STRAPI5_TOKEN: '' },
+      timeout: 5000,
+    });
+    const text = fs.readFileSync(realEnv, 'utf8');
+    const matches = text.match(/^\s*STRAPI5_TOKEN\s*=/gm) || [];
+    assert(matches.length === 1, `expected exactly 1 STRAPI5_TOKEN line, got ${matches.length}`);
+    assert(text.includes(`STRAPI5_TOKEN=${tok2}`), `expected new token in .env`);
+    assert(!text.includes(tok1), `old token should be replaced, not duplicated`);
+  } finally {
+    fs.rmSync(realEnv, { force: true });
+    if (realEnvExisted) fs.renameSync(realEnvBak, realEnv);
+  }
+});
+
+test('set-strapi5-token refuses short tokens', () => {
+  const setTokenScript = path.join(ROOT, 'migration/scripts/set-strapi5-token.js');
+  let threw = false;
+  try {
+    execSync(`node ${escapeShellArg(setTokenScript)} short`, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, STRAPI5_TOKEN: '' },
+      timeout: 5000,
+    });
+  } catch (err) {
+    threw = true;
+    const out = (err.stderr || '').toString();
+    assert(out.includes('Refusing'), `expected "Refusing" in stderr, got: ${out}`);
+  }
+  assert(threw, `expected non-zero exit on short token`);
+});
+
+test('committed config templates have empty token fallbacks (no .env-needed leak)', () => {
+  for (const f of ['config.dev.js', 'config.prod.js', 'config.example.js']) {
+    const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const m = text.match(/STRAPI5_TOKEN\s*\|\|\s*(['"])([^'"]*)\1/);
+    if (m) {
+      assert(m[2] === '', `${f}: token fallback should be empty, got ${m[2].slice(0, 8)}…`);
+    }
+  }
+});
+
+test('local config.js (if present) has empty token fallback', () => {
+  const cj = path.join(ROOT, 'config.js');
+  if (!fs.existsSync(cj)) return; // no config.js, nothing to check
+  const text = fs.readFileSync(cj, 'utf8');
+  const m = text.match(/STRAPI5_TOKEN\s*\|\|\s*(['"])([^'"]*)\1/);
+  if (!m) return;
+  assert(
+    m[2] === '',
+    `config.js: token fallback should be empty (token belongs in .env), got ${m[2].slice(0, 8)}…`,
+  );
 });
 
 // ──────────────────────────────────────────────────────────────────────

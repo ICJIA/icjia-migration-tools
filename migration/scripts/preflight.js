@@ -489,7 +489,8 @@ async function checkStrapi5Auth() {
       status: 'FAIL',
       detail: 'STRAPI5_TOKEN is empty',
       guidance: `Generate a Full-Access token in Strapi 5 admin: Settings → API Tokens\n     ` +
-        `Then: export STRAPI5_TOKEN="<token>"`,
+        `Then either: pnpm set-token  (interactive — writes to .env, mode 0600)\n     ` +
+        `Or: export STRAPI5_TOKEN="<token>"  (this shell only)`,
     };
   }
   // Use /api/upload/files since the upload plugin is core in Strapi 5 and
@@ -712,8 +713,8 @@ function printChecklist() {
   console.log(box(`     ${s5Url}/admin → Settings → API Tokens → Create new API Token`));
   console.log(box(`     Token type: ${BOLD}Full access${RESET}, Duration: ${BOLD}Unlimited${RESET}`));
   console.log(box(`     ${YELLOW}!${RESET} Read-only tokens get HTTP 405 on POST — write phases will fail`));
-  console.log(box(`     Then: ${DIM}export STRAPI5_TOKEN="<your-token>"${RESET}`));
-  console.log(box(`     ${DIM}or paste it into config.js (gitignored)${RESET}`));
+  console.log(box(`     Then: ${DIM}pnpm set-token${RESET} (interactive — writes to .env, mode 0600)`));
+  console.log(box(`     ${DIM}or: export STRAPI5_TOKEN="<your-token>" (this shell only)${RESET}`));
   console.log(box(''));
   console.log(box(`  ${BOLD}4. Strapi 3 source files in repo${RESET}`));
   console.log(box(`     Path: ${CYAN}docs/strapi-3-source/${RESET}`));
